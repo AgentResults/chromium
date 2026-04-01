@@ -1,0 +1,23 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Asmodeus browser automation components.
+# These are NOT devtools protocol handlers — those live in
+# chrome/browser/devtools/protocol/asmodeus_handler.{h,cc}.
+# This target is for standalone Asmodeus components like
+# auth observers, form detectors, and stealth modules that
+# the handler delegates to.
+
+source_set("asmodeus") {
+  sources = [
+    "asmodeus_state.cc",
+    "asmodeus_state.h",
+  ]
+
+  deps = [
+    "//base",
+    "//content/public/browser",
+    "//url",
+  ]
+}

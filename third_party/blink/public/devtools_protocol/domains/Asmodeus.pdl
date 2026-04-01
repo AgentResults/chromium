@@ -1,0 +1,196 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# Asmodeus CDP domain — agent-controlled browser automation.
+
+experimental domain Asmodeus
+
+  # ── Cookie type (self-contained, no Network dependency) ─────
+
+  type Cookie extends object
+    properties
+      string name
+      string value
+      string domain
+      string path
+      number expires
+      boolean httpOnly
+      boolean secure
+      boolean session
+
+  # ── Credential types ────────────────────────────────────────
+
+  type Credential extends object
+    properties
+      string origin
+      string username
+      string password
+      optional string totpSecret
+      optional string notes
+      optional number lastUsed
+
+  # ── Auth flow types ─────────────────────────────────────────
+
+  type AuthFlowType extends string
+    enum
+      login-form
+      oauth
+      saml
+      captcha
+      two-factor
+      unknown
+
+  type AuthFlowState extends string
+    enum
+      detected
+      in-progress
+      completed
+      failed
+
+  type AuthFlow extends object
+    properties
+      AuthFlowType type
+      string origin
+      AuthFlowState state
+      optional string provider
+      optional object details
+
+  # ── Login form types ────────────────────────────────────────
+
+  type LoginFormType extends string
+    enum
+      login
+      registration
+      two-factor
+      password-reset
+      unknown
+
+  type LoginForm extends object
+    properties
+      LoginFormType type
+      string usernameSelector
+      string passwordSelector
+      string submitSelector
+      optional array of object extraFields
+      optional boolean hasRememberMe
+      optional boolean hasForgotPassword
+
+  # ── Session types ───────────────────────────────────────────
+
+  type SessionSnapshot extends object
+    properties
+      string origin
+      array of Cookie cookies
+      optional object localStorage
+      optional object sessionStorage
+      optional number timestamp
+
+  # ── Commands ────────────────────────────────────────────────
+
+  # Enable the Asmodeus domain. Starts auth flow observation.
+  command enable
+
+  # Disable the Asmodeus domain. Stops auth flow observation.
+  command disable
+
+  # ── Fingerprint suppression ─────────────────────────────────
+
+  # Suppress automation fingerprints (navigator.webdriver, debugger bar, etc.)
+  command suppressFingerprints
+    parameters
+      boolean suppress
+
+  # ── Credential management ───────────────────────────────────
+
+  # Get stored credentials for an origin.
+  command getCredentials
+    parameters
+      string origin
+    returns
+      array of Credential credentials
+
+  # Save credentials for an origin.
+  command saveCredentials
+    parameters
+      string origin
+      string username
+      string password
+      optional string totpSecret
+      optional string notes
+
+  # Delete stored credentials.
+  command deleteCredentials
+    parameters
+      string origin
+      string username
+
+  # List all stored credentials.
+  command listCredentials
+    returns
+      array of Credential credentials
+
+  # Generate a TOTP code from a secret.
+  command generateTOTP
+    parameters
+      string secret
+      optional integer digits
+      optional integer period
+    returns
+      string code
+      number remainingSeconds
+
+  # ── Auth flow detection ─────────────────────────────────────
+
+  # Detect the current auth flow on the page.
+  command detectAuthFlow
+    returns
+      optional AuthFlow flow
+
+  # Get all active auth flows across tabs.
+  command getAuthState
+    returns
+      array of AuthFlow activeFlows
+
+  # ── Login form detection ────────────────────────────────────
+
+  # Detect login form on current page using Chromium's autofill heuristics.
+  command detectLoginForm
+    returns
+      optional LoginForm form
+
+  # Auto-login using stored credentials.
+  command autoLogin
+    parameters
+      string origin
+      optional string username
+    returns
+      boolean success
+      optional string error
+
+  # ── Session persistence ─────────────────────────────────────
+
+  # Export session state (cookies + storage) for an origin.
+  command exportSession
+    parameters
+      optional string origin
+    returns
+      array of SessionSnapshot sessions
+
+  # Import session state from snapshots.
+  command importSession
+    parameters
+      array of SessionSnapshot sessions
+
+  # ── Events ──────────────────────────────────────────────────
+
+  # Fired when an auth flow is detected (OAuth redirect, SAML, CAPTCHA, etc.)
+  event authFlowDetected
+    parameters
+      AuthFlow flow
+
+  # Fired when an auth flow completes or fails.
+  event authFlowCompleted
+    parameters
+      AuthFlow flow
+      boolean success
