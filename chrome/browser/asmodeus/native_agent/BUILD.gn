@@ -1,0 +1,108 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//third_party/webrtc/webrtc.gni")
+
+executable("asmodeus_agent") {
+  sources = [
+    "main.cc",
+    "native_agent.cc",
+    "native_agent.h",
+    "avatar_renderer.cc",
+    "avatar_renderer.h",
+    "control_channel.cc",
+    "control_channel.h",
+    "conversation_engine.cc",
+    "conversation_engine.h",
+    "dialogue_manager.cc",
+    "dialogue_manager.h",
+    "downsampler.cc",
+    "downsampler.h",
+    "llm_turn_policy.cc",
+    "llm_turn_policy.h",
+    "speech_output.cc",
+    "speech_output.h",
+    "turn_policy.cc",
+    "turn_policy.h",
+    "signaling_client.cc",
+    "signaling_client.h",
+    "shm_audio_device_module.cc",
+    "shm_audio_device_module.h",
+    "shm_video_source.cc",
+    "shm_video_source.h",
+    "video_shm.h",
+    "webrtc_peer.cc",
+    "webrtc_peer.h",
+  ]
+
+  deps = [
+    "//base",
+    "//media/audio/asmodeus:audio_ring_buffer",
+    "//net",
+    "//skia",
+    "//third_party/libyuv",
+    "//third_party/webrtc_overrides:webrtc_component",
+    "//third_party/webrtc/api:create_modular_peer_connection_factory",
+    "//third_party/webrtc/api:enable_media_with_defaults",
+    "//third_party/webrtc/api/audio_codecs:builtin_audio_decoder_factory",
+    "//third_party/webrtc/api/audio_codecs:builtin_audio_encoder_factory",
+    "//third_party/webrtc/api/video_codecs:builtin_video_decoder_factory",
+    "//third_party/webrtc/api/video_codecs:builtin_video_encoder_factory",
+  ]
+
+  # External system libraries for conversation engine (autonomous mode).
+  #
+  # Homebrew dylibs target macOS 26.0 but Chromium targets 12.0, causing
+  # platform version mismatch errors with -fatal_warnings. We use patched
+  # copies in /tmp/asmodeus-libs/ with minos set to 12.0 via vtool.
+  # speexdsp is linked statically (has .a available).
+  #
+  # To regenerate patched libs:
+  #   cp /opt/homebrew/opt/whisper-cpp/lib/libwhisper.dylib /tmp/asmodeus-libs/
+  #   cp /opt/homebrew/opt/onnxruntime/lib/libonnxruntime.dylib /tmp/asmodeus-libs/
+  #   xcrun vtool -set-build-version macos 12.0 26.0 -replace -output /tmp/asmodeus-libs/libwhisper.dylib /tmp/asmodeus-libs/libwhisper.dylib
+  #   xcrun vtool -set-build-version macos 12.0 26.0 -replace -output /tmp/asmodeus-libs/libonnxruntime.dylib /tmp/asmodeus-libs/libonnxruntime.dylib
+  #   codesign -f -s - /tmp/asmodeus-libs/libwhisper.dylib
+  #   codesign -f -s - /tmp/asmodeus-libs/libonnxruntime.dylib
+  libs = [
+    "/tmp/asmodeus-libs/libspeexdsp.a",
+    "curl",
+  ]
+
+  # Use -isystem for external headers to suppress Chromium style checks.
+  cflags_cc = [
+    "-isystem", "/opt/homebrew/include",
+    "-isystem", "/opt/homebrew/opt/whisper-cpp/include",
+    "-isystem", "/opt/homebrew/opt/onnxruntime/include/onnxruntime",
+    "-isystem", "/opt/homebrew/opt/speexdsp/include",
+  ]
+
+  # ONNX Runtime C++ API uses exceptions and triggers Chromium style checks
+  # on its headers. Override defaults for this standalone binary.
+  configs -= [
+    "//build/config/compiler:no_exceptions",
+    "//build/config/compiler:chromium_code",
+  ]
+  configs += [
+    "//build/config/compiler:exceptions",
+    "//build/config/compiler:no_chromium_code",
+  ]
+
+  # Exclude Homebrew headers from raw_ptr plugin checks.
+  cflags = [
+    "-Xclang", "-plugin-arg-raw-ptr-plugin",
+    "-Xclang", "raw-ptr-exclude-path=/opt/homebrew",
+  ]
+
+  ldflags = [
+    "-L/tmp/asmodeus-libs",
+    "-lwhisper",
+    "-lggml",
+    "-lggml-base",
+    "-lonnxruntime",
+    "-Wl,-rpath,/opt/homebrew/opt/whisper-cpp/lib",
+    "-Wl,-rpath,/opt/homebrew/opt/ggml/lib",
+    "-Wl,-rpath,/opt/homebrew/opt/onnxruntime/lib",
+  ]
+}

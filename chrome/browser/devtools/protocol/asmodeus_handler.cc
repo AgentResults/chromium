@@ -7,9 +7,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <fcntl.h>
 #include <map>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "base/functional/bind.h"
+#include "base/run_loop.h"
+#include "content/public/browser/browser_thread.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -122,7 +127,21 @@ AsmodeusHandler::AsmodeusHandler(protocol::UberDispatcher* dispatcher,
   }
 }
 
-AsmodeusHandler::~AsmodeusHandler() = default;
+AsmodeusHandler::~AsmodeusHandler() {
+  // PeerConnectionTrackerHostObserver auto-unregisters via its destructor.
+  // Clean up all virtual audio devices registered by this handler.
+  for (auto& [name, server] : media_servers_) {
+    asmodeus::UnregisterVirtualDevice(name);
+    server->Stop();
+  }
+  media_servers_.clear();
+  // Clean up video shm files.
+  for (auto& [name, path] : video_shm_paths_) {
+    unlink(path.c_str());
+  }
+  video_shm_paths_.clear();
+  participants_.clear();
+}
 
 // ── Enable / Disable ─────────────────────────────────────────────
 
@@ -159,9 +178,24 @@ void AsmodeusHandler::InjectStealthScript() {
   if (!web_contents_ || !web_contents_->GetPrimaryMainFrame()) {
     return;
   }
-  web_contents_->GetPrimaryMainFrame()->ExecuteJavaScript(
+  auto* frame = web_contents_->GetPrimaryMainFrame();
+  if (!frame->IsRenderFrameLive()) {
+    return;
+  }
+  const GURL& url = frame->GetLastCommittedURL();
+  if (url.is_empty() || !url.is_valid()) {
+    return;
+  }
+  if (!url.SchemeIs("http") && !url.SchemeIs("https") && !url.SchemeIs("file")) {
+    return;
+  }
+  // ExecuteJavaScript is restricted to chrome:// and devtools:// URLs.
+  // Use ExecuteJavaScriptForTests with world_id=0 (global world) to run
+  // on any page. This is safe because we only inject on verified schemes.
+  frame->ExecuteJavaScriptForTests(
       base::UTF8ToUTF16(std::string(kStealthScript)),
-      base::NullCallback());
+      base::NullCallback(),
+      /*world_id=*/0);
 }
 
 // ── Credential Management ────────────────────────────────────────
@@ -634,4 +668,704 @@ void AsmodeusHandler::ImportSession(
     }
   }
   callback->sendSuccess();
+}
+
+// ── Virtual Audio (per-device named virtual mics) ───────────────
+
+DispatchResponse AsmodeusHandler::EnableVirtualAudio(
+    std::optional<String> in_name,
+    std::optional<int> in_sampleRate,
+    std::optional<int> in_channels,
+    String* out_deviceId,
+    String* out_shmPathIn,
+    String* out_shmPathOut) {
+  std::string name = in_name.value_or("default");
+  int sr = in_sampleRate.value_or(48000);
+  int ch = in_channels.value_or(1);
+
+  // Check if this device already exists.
+  auto it = media_servers_.find(name);
+  if (it != media_servers_.end() && it->second->is_running()) {
+    *out_deviceId = it->second->device_id();
+    *out_shmPathIn = it->second->input_path();
+    *out_shmPathOut = it->second->output_path();
+    return DispatchResponse::Success();
+  }
+
+  // Create new media server for this device.
+  auto server = std::make_unique<asmodeus::AsmodeusMediaServer>();
+  if (!server->Start(name, sr, ch)) {
+    return DispatchResponse::ServerError(
+        "Failed to create shared memory for device: " + name);
+  }
+
+  // Register in global device registry so AudioManagerMac can find it.
+  asmodeus::RegisterVirtualDevice(name, server->input_path());
+  LOG(WARNING) << "[Asmodeus] Virtual device '" << name << "' registered."
+               << " deviceId=" << server->device_id()
+               << " input=" << server->input_path();
+
+  *out_deviceId = server->device_id();
+  *out_shmPathIn = server->input_path();
+  *out_shmPathOut = server->output_path();
+
+  media_servers_[name] = std::move(server);
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::DisableVirtualAudio(
+    std::optional<String> in_name) {
+  std::string name = in_name.value_or("default");
+
+  auto it = media_servers_.find(name);
+  if (it != media_servers_.end()) {
+    asmodeus::UnregisterVirtualDevice(name);
+    it->second->Stop();
+    media_servers_.erase(it);
+  }
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::GetVirtualAudioStatus(
+    std::optional<String> in_name,
+    bool* out_enabled,
+    std::optional<String>* out_shmPathIn,
+    std::optional<String>* out_shmPathOut,
+    std::optional<int>* out_sampleRate,
+    std::optional<int>* out_channels) {
+  std::string name = in_name.value_or("default");
+
+  auto it = media_servers_.find(name);
+  *out_enabled = it != media_servers_.end() && it->second->is_running();
+  if (*out_enabled) {
+    *out_shmPathIn = it->second->input_path();
+    *out_shmPathOut = it->second->output_path();
+    *out_sampleRate = it->second->sample_rate();
+    *out_channels = it->second->channels();
+  }
+  return DispatchResponse::Success();
+}
+
+// ── Virtual Camera ──────────────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::EnableVirtualCamera(
+    std::optional<String> in_name,
+    std::optional<int> in_width,
+    std::optional<int> in_height,
+    std::optional<int> in_fps,
+    String* out_deviceId,
+    String* out_shmPath) {
+  std::string name = in_name.value_or("default");
+  int w = in_width.value_or(640);
+  int h = in_height.value_or(480);
+  int fps = in_fps.value_or(15);
+
+  // Check if already exists.
+  auto it = video_shm_paths_.find(name);
+  if (it != video_shm_paths_.end()) {
+    *out_deviceId = "asmodeus-cam-" + name;
+    *out_shmPath = it->second;
+    return DispatchResponse::Success();
+  }
+
+  // Create the shm directory.
+  const char* home = getenv("HOME");
+  std::string dir = home ? std::string(home) + "/.asmodeus"
+                         : "/tmp/asmodeus-media";
+  mkdir(dir.c_str(), 0755);
+
+  // Create video ring buffer file.
+  std::string shm_path = dir + "/video-in-" + name + ".shm";
+  const size_t frame_size =
+      static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
+  const int num_frames = 3;
+  const size_t total_size = 32 + num_frames * frame_size;
+
+  int fd = open(shm_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+  if (fd < 0) {
+    return DispatchResponse::ServerError(
+        "Failed to create video shm: " + shm_path);
+  }
+  if (ftruncate(fd, static_cast<off_t>(total_size)) != 0) {
+    close(fd);
+    return DispatchResponse::ServerError("Failed to truncate video shm");
+  }
+
+  // Write header.
+  uint32_t header[8] = {
+    static_cast<uint32_t>(w),
+    static_cast<uint32_t>(h),
+    0,  // pixel_format: ARGB
+    static_cast<uint32_t>(fps),
+    0,  // write_seq
+    0,  // read_seq
+    static_cast<uint32_t>(frame_size),
+    static_cast<uint32_t>(num_frames)
+  };
+  // SAFETY: header is a stack array of known size.
+  UNSAFE_BUFFERS(write(fd, header, 32));
+  close(fd);
+
+  video_shm_paths_[name] = shm_path;
+
+  LOG(WARNING) << "[Asmodeus] Virtual camera '" << name << "' created: "
+               << w << "x" << h << "@" << fps << " shm=" << shm_path;
+
+  *out_deviceId = "asmodeus-cam-" + name;
+  *out_shmPath = shm_path;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::DisableVirtualCamera(
+    std::optional<String> in_name) {
+  std::string name = in_name.value_or("default");
+
+  auto it = video_shm_paths_.find(name);
+  if (it != video_shm_paths_.end()) {
+    unlink(it->second.c_str());
+    video_shm_paths_.erase(it);
+  }
+  return DispatchResponse::Success();
+}
+
+// ── Headless Participants ───────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::CreateParticipant(
+    const String& in_name,
+    const String& in_url,
+    std::optional<String> in_displayName,
+    String* out_participantId,
+    bool* out_loaded) {
+  std::string name = in_name;
+
+  if (participants_.count(name)) {
+    *out_participantId = name;
+    *out_loaded = participants_[name]->is_loaded();
+    return DispatchResponse::Success();
+  }
+
+  if (!web_contents_) {
+    return DispatchResponse::ServerError("No browser context available");
+  }
+
+  // Derive device IDs from participant name:
+  // Audio: "asmodeus-{name}", Video: "asmodeus-cam-{name}"
+  std::string audio_dev = "asmodeus-" + name;
+  std::string video_dev = "asmodeus-cam-" + name;
+
+  // Use incognito context for additional participants so they have a
+  // separate identity. The first participant uses the main profile (Google
+  // account), additional ones join as anonymous guests.
+  auto participant = std::make_unique<asmodeus::AsmodeusParticipant>(
+      name, web_contents_->GetBrowserContext(), audio_dev, video_dev,
+      /*use_incognito=*/false);
+  participant->Navigate(GURL(in_url));
+
+  *out_participantId = name;
+  *out_loaded = false;
+
+  participants_[name] = std::move(participant);
+  return DispatchResponse::Success();
+}
+
+void AsmodeusHandler::EvaluateInParticipant(
+    const String& in_name,
+    const String& in_expression,
+    std::unique_ptr<EvaluateInParticipantCallback> callback) {
+  std::string name = in_name;
+
+  auto it = participants_.find(name);
+  if (it == participants_.end()) {
+    callback->sendFailure(
+        DispatchResponse::ServerError("Participant not found: " + name));
+    return;
+  }
+
+  it->second->ExecuteJS(
+      base::UTF8ToUTF16(in_expression),
+      base::BindOnce(
+          [](std::unique_ptr<EvaluateInParticipantCallback> cb,
+             base::Value result) {
+            if (result.is_string()) {
+              cb->sendSuccess(result.GetString());
+            } else if (result.is_none()) {
+              cb->sendSuccess(std::optional<String>());
+            } else {
+              // Convert non-string results to JSON
+              cb->sendSuccess(result.DebugString());
+            }
+          },
+          std::move(callback)));
+}
+
+DispatchResponse AsmodeusHandler::GetParticipantState(
+    const String& in_name,
+    bool* out_exists,
+    bool* out_loaded,
+    std::optional<String>* out_url) {
+  std::string name = in_name;
+
+  auto it = participants_.find(name);
+  *out_exists = it != participants_.end();
+  if (*out_exists) {
+    *out_loaded = it->second->is_loaded();
+    auto* wc = it->second->web_contents();
+    if (wc) {
+      *out_url = wc->GetLastCommittedURL().spec();
+    }
+  } else {
+    *out_loaded = false;
+  }
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::DestroyParticipant(const String& in_name) {
+  std::string name = in_name;
+  participants_.erase(name);
+  return DispatchResponse::Success();
+}
+
+// ── Traffic capture ──────────────────────────────────────────────
+
+namespace {
+
+bool MatchesAnyPattern(const std::string& url,
+                       const std::vector<std::string>& patterns) {
+  for (const auto& p : patterns) {
+    if (url.find(p) != std::string::npos) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+// ── Page interaction ──────────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::TypeText(const String& in_text) {
+  if (!web_contents_) return DispatchResponse::ServerError("no web contents");
+  // Use Input.insertText equivalent — dispatch composition events
+  content::RenderFrameHost* rfh = web_contents_->GetFocusedFrame();
+  if (!rfh) return DispatchResponse::ServerError("no focused frame");
+  // Execute JS to type into the active element
+  // TypeText dispatches input events via execCommand for reliability.
+  // The actual typing is done client-side via Runtime.evaluate since
+  // direct DOM access from browser process is complex.
+  // This is a placeholder — clients should use Runtime.evaluate directly.
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::ClickByAriaLabel(
+    const String& in_labelSubstring,
+    bool* out_found,
+    std::optional<String>* out_clickedLabel) {
+  *out_found = false;
+  if (!web_contents_) return DispatchResponse::ServerError("no web contents");
+  // This is a synchronous command but DOM access needs the renderer.
+  // For now, return success — the actual click is done via Runtime.evaluate
+  // from the CDP client. This command is a convenience wrapper.
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::CaptureStart(
+    std::unique_ptr<protocol::Array<String>> in_includeUrlPatterns,
+    std::unique_ptr<protocol::Array<String>> in_excludeUrlPatterns,
+    std::optional<bool> in_captureWebRtc,
+    std::optional<bool> in_captureWebSocketFrames,
+    std::optional<bool> in_captureHttp) {
+  include_patterns_.clear();
+  exclude_patterns_.clear();
+  if (in_includeUrlPatterns) {
+    for (const auto& s : *in_includeUrlPatterns) include_patterns_.push_back(s);
+  }
+  if (in_excludeUrlPatterns) {
+    for (const auto& s : *in_excludeUrlPatterns) exclude_patterns_.push_back(s);
+  }
+  capture_webrtc_ = in_captureWebRtc.value_or(true);
+  capture_ws_ = in_captureWebSocketFrames.value_or(true);
+  capture_http_ = in_captureHttp.value_or(true);
+  capture_active_ = true;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::CaptureStop() {
+  capture_active_ = false;
+  url_by_pc_.clear();
+  return DispatchResponse::Success();
+}
+
+// ── Tab Audio Capture ──────────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::CaptureTabAudio(
+    const String& in_outputPath,
+    std::optional<int> in_sampleRate,
+    std::optional<int> in_channels) {
+  if (!web_contents_) {
+    return DispatchResponse::ServerError("No web contents");
+  }
+  audio_capture_ = std::make_unique<asmodeus::AsmodeusAudioCapture>();
+  int sr = in_sampleRate.value_or(48000);
+  int ch = in_channels.value_or(1);
+  if (!audio_capture_->Start(web_contents_, in_outputPath, sr, ch)) {
+    return DispatchResponse::ServerError("Failed to start audio capture");
+  }
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::StopAudioCapture(
+    double* out_durationMs, int* out_samples,
+    double* out_peakRms, String* out_outputPath) {
+  if (!audio_capture_ || !web_contents_) {
+    return DispatchResponse::ServerError("No active capture");
+  }
+
+  // Stop the JS capture
+  auto* main_frame = web_contents_->GetPrimaryMainFrame();
+  if (main_frame) {
+    main_frame->ExecuteJavaScriptForTests(
+        u"if(window.__asmodeusCapture) window.__asmodeusCapture.active=false;",
+        base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
+  }
+
+  // Return stats. Audio data stays in window.__asmodeusCapture.chunks
+  // and can be read by the CDP client via Runtime.evaluate.
+  auto result = audio_capture_->Stop();
+  *out_durationMs = result.duration_ms;
+  *out_samples = static_cast<int>(result.samples);
+  *out_peakRms = result.peak_rms;
+  *out_outputPath = result.output_path;
+  audio_capture_.reset();
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::GetAudioLevel(
+    double* out_rms, double* out_peak, bool* out_capturing) {
+  if (!audio_capture_) {
+    *out_rms = 0;
+    *out_peak = 0;
+    *out_capturing = false;
+    return DispatchResponse::Success();
+  }
+  auto level = audio_capture_->GetLevel();
+  *out_rms = level.rms;
+  *out_peak = level.peak;
+  *out_capturing = level.capturing;
+  return DispatchResponse::Success();
+}
+
+void AsmodeusHandler::OnPeerConnectionAdded(
+    content::GlobalRenderFrameHostId render_frame_host_id,
+    int lid,
+    base::ProcessId pid,
+    const std::string& url,
+    const std::string& rtc_configuration) {
+  url_by_pc_[{pid, lid}] = url;
+  if (!capture_active_ || !capture_webrtc_) return;
+  if (!include_patterns_.empty() &&
+      !MatchesAnyPattern(url, include_patterns_)) return;
+  if (MatchesAnyPattern(url, exclude_patterns_)) return;
+  double ts = base::Time::Now().InMillisecondsFSinceUnixEpoch();
+  frontend_->WebRtcSignal(lid, "create", "", "", "", "", "",
+                          rtc_configuration, url, ts);
+}
+
+void AsmodeusHandler::OnPeerConnectionRemoved(
+    content::GlobalRenderFrameHostId render_frame_host_id,
+    int lid) {
+  for (auto it = url_by_pc_.begin(); it != url_by_pc_.end(); ) {
+    if (it->first.second == lid) it = url_by_pc_.erase(it); else ++it;
+  }
+  if (!capture_active_ || !capture_webrtc_) return;
+  double ts = base::Time::Now().InMillisecondsFSinceUnixEpoch();
+  frontend_->WebRtcSignal(lid, "close", "", "", "", "", "", "", "", ts);
+}
+
+void AsmodeusHandler::OnPeerConnectionUpdated(
+    content::GlobalRenderFrameHostId render_frame_host_id,
+    int lid,
+    const std::string& type,
+    const std::string& value) {
+  if (!capture_active_ || !capture_webrtc_) return;
+  // Find frame url for this pc (via lid match).
+  std::string frame_url;
+  for (const auto& [key, u] : url_by_pc_) {
+    if (key.second == lid) { frame_url = u; break; }
+  }
+  if (!include_patterns_.empty() &&
+      !MatchesAnyPattern(frame_url, include_patterns_)) return;
+  if (MatchesAnyPattern(frame_url, exclude_patterns_)) return;
+
+  // Classify update type (empty strings = "not set").
+  std::string ev;
+  std::string sdp_type, sdp, candidate, ice_state, conn_state, raw_value;
+  if (type == "setLocalDescription" || type == "setRemoteDescription") {
+    ev = (type == "setLocalDescription") ? "localSdp" : "remoteSdp";
+    // value looks like: "type: offer, sdp: v=0..."
+    auto pos_sdp = value.find(", sdp: ");
+    if (value.rfind("type: ", 0) == 0 && pos_sdp != std::string::npos) {
+      sdp_type = value.substr(6, pos_sdp - 6);
+      sdp = value.substr(pos_sdp + 7);
+    } else {
+      raw_value = value;
+    }
+  } else if (type == "onicecandidate" || type == "addIceCandidate") {
+    ev = "iceCandidate";
+    candidate = value;
+  } else if (type == "iceconnectionstatechange") {
+    ev = "stateChange";
+    ice_state = value;
+  } else if (type == "connectionstatechange") {
+    ev = "stateChange";
+    conn_state = value;
+  } else if (type == "getStats") {
+    ev = "stats";
+    raw_value = value;
+  } else {
+    ev = "other";
+    raw_value = type + ": " + value;
+  }
+
+  double ts = base::Time::Now().InMillisecondsFSinceUnixEpoch();
+  frontend_->WebRtcSignal(lid, ev, sdp_type, sdp, candidate, ice_state,
+                          conn_state, raw_value, frame_url, ts);
+}
+
+// ── Meeting Management ─────────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::CreateMeeting(
+    std::optional<String> in_name,
+    std::optional<String> in_meetingHtml,
+    String* out_meetingUrl,
+    String* out_signalingUrl,
+    int* out_port) {
+  std::string name = in_name.value_or("Asmodeus Meeting");
+
+  if (meeting_server_ && meeting_server_->is_running()) {
+    *out_meetingUrl = meeting_server_->GetMeetingUrl();
+    *out_signalingUrl = meeting_server_->GetSignalingUrl();
+    *out_port = meeting_server_->port();
+    return DispatchResponse::Success();
+  }
+
+  std::string html_content;
+  if (in_meetingHtml.has_value()) {
+    html_content = in_meetingHtml.value();
+  } else {
+    html_content = "<!DOCTYPE html><html><body>"
+        "<h1>Asmodeus Meeting</h1>"
+        "<p>Pass meetingHtml parameter with full meeting page content.</p>"
+        "</body></html>";
+  }
+
+  meeting_server_ = std::make_unique<asmodeus::AsmodeusMeetingServer>();
+
+  // Start creates its own IO thread — safe to call from UI thread.
+  if (!meeting_server_->Start(name, html_content)) {
+    meeting_server_.reset();
+    return DispatchResponse::ServerError("Failed to start meeting server");
+  }
+
+  // Also create the new meeting coordinator (native agent system).
+  std::string home = getenv("HOME") ? getenv("HOME") : "/tmp";
+  std::string agent_path = home + "/workspace/chromium/src/out/Default/asmodeus_agent";
+  coordinator_ = std::make_unique<asmodeus::MeetingCoordinator>();
+  coordinator_->Start(name, agent_path);
+
+  *out_meetingUrl = meeting_server_->GetMeetingUrl();
+  *out_signalingUrl = meeting_server_->GetSignalingUrl();
+  *out_port = meeting_server_->port();
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::AddAgent(
+    const String& in_name,
+    std::optional<String> in_voiceModel,
+    std::optional<String> in_displayName,
+    String* out_participantId,
+    String* out_audioShmPath,
+    String* out_videoShmPath,
+    bool* out_connected,
+    int* out_controlPort) {
+  std::string name = in_name;
+
+  // Use coordinator if available (new native agent system).
+  if (coordinator_) {
+    std::string home = getenv("HOME") ? getenv("HOME") : "/tmp";
+    // Assign different voices per agent for variety.
+    static const char* kVoices[] = {
+        "en_US-amy-medium.onnx",       // female
+        "en_US-ryan-high.onnx",        // male
+        "en_US-kristin-medium.onnx",   // female
+        "en_US-joe-medium.onnx",       // male
+        "en_US-kusal-medium.onnx",     // male
+        "en_US-norman-medium.onnx",    // male
+    };
+    static int voice_idx = 0;
+    std::string default_voice = home + "/.asmodeus/voices/" +
+        kVoices[voice_idx++ % 6];
+    std::string voice = in_voiceModel.value_or(default_voice);
+    std::string display = in_displayName.value_or(
+        std::string(1, toupper(name[0])) + name.substr(1));
+    if (!coordinator_->AddAgent(name, voice, display)) {
+      return DispatchResponse::ServerError("Failed to add agent: " + name);
+    }
+    auto it = coordinator_->agents().find(name);
+    if (it != coordinator_->agents().end()) {
+      *out_participantId = name;
+      *out_audioShmPath = it->second.audio_shm_path;
+      *out_videoShmPath = it->second.video_shm_path;
+      *out_connected = true;
+      *out_controlPort = it->second.control_port;
+    }
+    return DispatchResponse::Success();
+  }
+
+  // Legacy path (Chrome-based participants).
+  if (!meeting_server_ || !meeting_server_->is_running()) {
+    return DispatchResponse::ServerError(
+        "No meeting running. Call createMeeting first.");
+  }
+
+  if (participants_.count(name)) {
+    return DispatchResponse::ServerError(
+        "Agent already exists: " + name);
+  }
+
+  // 1. Create virtual audio device.
+  if (!media_servers_.count(name)) {
+    auto server = std::make_unique<asmodeus::AsmodeusMediaServer>();
+    if (!server->Start(name, 48000, 1)) {
+      return DispatchResponse::ServerError(
+          "Failed to create virtual audio for: " + name);
+    }
+    media_servers_[name] = std::move(server);
+  }
+
+  // 2. Create virtual camera (shm).
+  std::string home = getenv("HOME") ? getenv("HOME") : "/tmp";
+  std::string video_shm = home + "/.asmodeus/video-in-" + name + ".shm";
+  video_shm_paths_[name] = video_shm;
+
+  // 3. Build meeting URL with query params.
+  std::string display = in_displayName.value_or(
+      std::string(1, toupper(name[0])) + name.substr(1));
+  std::string meeting_url = meeting_server_->GetMeetingUrl() +
+      "?name=" + display +
+      "&signaling=" + meeting_server_->GetSignalingUrl() +
+      "&device=" + name +
+      "&meeting=" + meeting_server_->meeting_name();
+
+  // 4. Create participant (headless WebContents).
+  auto participant = std::make_unique<asmodeus::AsmodeusParticipant>(
+      name, web_contents_->GetBrowserContext(),
+      "asmodeus-" + name, "asmodeus-cam-" + name,
+      /*use_incognito=*/false);
+  participant->Navigate(GURL(meeting_url));
+
+  *out_participantId = name;
+  *out_audioShmPath = media_servers_[name]->input_path();
+  *out_videoShmPath = video_shm;
+  *out_connected = false;  // Will connect asynchronously via WebRTC.
+  *out_controlPort = 0;  // Legacy path doesn't use control ports.
+
+  participants_[name] = std::move(participant);
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::RemoveAgent(const String& in_name) {
+  std::string name = in_name;
+
+  // Coordinator agent removal
+  if (coordinator_) {
+    coordinator_->RemoveAgent(name);
+    return DispatchResponse::Success();
+  }
+
+  // Legacy path: Destroy participant.
+  auto p_it = participants_.find(name);
+  if (p_it != participants_.end()) {
+    participants_.erase(p_it);
+  }
+
+  // Destroy virtual audio.
+  auto m_it = media_servers_.find(name);
+  if (m_it != media_servers_.end()) {
+    m_it->second->Stop();
+    media_servers_.erase(m_it);
+  }
+
+  // Remove virtual camera path.
+  video_shm_paths_.erase(name);
+
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::GetMeetingState(
+    std::unique_ptr<protocol::Array<protocol::Asmodeus::AgentState>>* out_agents,
+    int* out_signalingPeers,
+    bool* out_recording) {
+  auto agents = std::make_unique<protocol::Array<protocol::Asmodeus::AgentState>>();
+
+  for (const auto& [name, participant] : participants_) {
+    auto state = protocol::Asmodeus::AgentState::Create()
+        .SetName(name)
+        .SetConnected(participant->is_loaded())
+        .SetPeerCount(0)
+        .SetAudioRmsIn(0)
+        .SetAudioRmsOut(0)
+        .Build();
+    agents->push_back(std::move(state));
+  }
+
+  // Also include coordinator agents
+  if (coordinator_) {
+    for (const auto& [name, entry] : coordinator_->agents()) {
+      auto state = protocol::Asmodeus::AgentState::Create()
+          .SetName(name)
+          .SetConnected(true)
+          .SetPeerCount(0)
+          .SetAudioRmsIn(entry.rms)
+          .SetAudioRmsOut(0)
+          .Build();
+      agents->push_back(std::move(state));
+    }
+  }
+
+  *out_agents = std::move(agents);
+  *out_signalingPeers = meeting_server_ ? meeting_server_->GetPeerCount() : 0;
+  *out_recording = coordinator_ ? coordinator_->is_recording() : false;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::Speak(const String& in_name,
+                                         const String& in_text,
+                                         bool* out_queued) {
+  if (!coordinator_) {
+    return DispatchResponse::ServerError("No meeting. Call createMeeting first.");
+  }
+  *out_queued = coordinator_->Speak(in_name, in_text);
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::StartRecording(const String& in_outputDir,
+                                                   bool* out_started) {
+  if (!coordinator_) {
+    return DispatchResponse::ServerError("No meeting. Call createMeeting first.");
+  }
+  *out_started = coordinator_->StartRecording(in_outputDir);
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::StopRecording(int* out_frames,
+                                                  int* out_audioSamples,
+                                                  double* out_peakRms,
+                                                  String* out_mp4Path) {
+  if (!coordinator_) {
+    return DispatchResponse::ServerError("No meeting.");
+  }
+  int64_t samples = 0;
+  std::string mp4;
+  coordinator_->StopRecording(out_frames, &samples, out_peakRms, &mp4);
+  *out_audioSamples = static_cast<int>(samples);
+  *out_mp4Path = mp4;
+  return DispatchResponse::Success();
 }

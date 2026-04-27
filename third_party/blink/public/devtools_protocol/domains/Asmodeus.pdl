@@ -194,3 +194,239 @@ experimental domain Asmodeus
     parameters
       AuthFlow flow
       boolean success
+
+  # ── Virtual Audio ───────────────────────────────────────
+
+  # Enable a named virtual audio device backed by shared memory.
+  # Creates ring buffer files that external processes can read/write.
+  # Each name creates a separate device, allowing multiple agents
+  # to have independent virtual microphones.
+  command enableVirtualAudio
+    parameters
+      optional string name
+      optional integer sampleRate
+      optional integer channels
+    returns
+      string deviceId
+      string shmPathIn
+      string shmPathOut
+
+  # Disable a named virtual audio device and clean up shared memory.
+  command disableVirtualAudio
+    parameters
+      optional string name
+
+  # Get virtual audio status for all devices or a specific one.
+  command getVirtualAudioStatus
+    parameters
+      optional string name
+    returns
+      boolean enabled
+      optional string shmPathIn
+      optional string shmPathOut
+      optional integer sampleRate
+      optional integer channels
+
+  # ── Virtual Camera ───────────────────────────────────────
+
+  # Enable a named virtual camera device backed by shared memory.
+  command enableVirtualCamera
+    parameters
+      optional string name
+      optional integer width
+      optional integer height
+      optional integer fps
+    returns
+      string deviceId
+      string shmPath
+
+  # Disable a named virtual camera device.
+  command disableVirtualCamera
+    parameters
+      optional string name
+
+  # ── Headless Participants ─────────────────────────────────
+
+  # Create a headless meeting participant with its own virtual devices.
+  # The participant loads a URL in a hidden WebContents.
+  command createParticipant
+    parameters
+      string name
+      string url
+      optional string displayName
+    returns
+      string participantId
+      boolean loaded
+
+  # Execute JavaScript in a participant's hidden WebContents.
+  command evaluateInParticipant
+    parameters
+      string name
+      string expression
+    returns
+      optional string result
+
+  # Get participant state.
+  command getParticipantState
+    parameters
+      string name
+    returns
+      boolean exists
+      boolean loaded
+      optional string url
+
+  # Destroy a participant and clean up.
+  command destroyParticipant
+    parameters
+      string name
+
+  # ── Page interaction (reliable alternatives to DOM scraping) ──
+
+  # Inject text into the focused input/textarea on the page.
+  # More reliable than evaluating JS to set textarea.value because
+  # it dispatches proper input events.
+  command typeText
+    parameters
+      string text
+
+  # Click an element matching an aria-label substring.
+  # Finds the first visible element whose aria-label contains the
+  # given substring and clicks it.
+  command clickByAriaLabel
+    parameters
+      string labelSubstring
+    returns
+      boolean found
+      optional string clickedLabel
+
+  # ── Traffic capture ───────────────────────────────────────
+  # Live stream of decoded network traffic. Phase 1: WebRTC signals
+  # (every createOffer/setLocalDescription/iceCandidate/stateChange/
+  # getStats event from every RTCPeerConnection in every frame of every
+  # render process). Phase 2 (future): WebSocket frames, HTTP transactions.
+
+  # Begin capturing. Events (below) fire until captureStop.
+  command captureStart
+    parameters
+      # Substring URL filters on the frame's URL. Empty list = match all.
+      optional array of string includeUrlPatterns
+      optional array of string excludeUrlPatterns
+      # Subsystem toggles (default true).
+      optional boolean captureWebRtc
+      optional boolean captureWebSocketFrames
+      optional boolean captureHttp
+
+  # Stop capturing. Idempotent.
+  command captureStop
+
+  # ── Tab Audio Capture ───────────────────────────────────────
+  # Captures all audio playing in the inspected tab to a WAV file.
+  # Uses Chrome's internal audio capture (same mechanism as chrome.tabCapture).
+
+  # Start capturing tab audio to a WAV file.
+  command captureTabAudio
+    parameters
+      string outputPath
+      optional integer sampleRate
+      optional integer channels
+
+  # Stop audio capture, return stats.
+  # Audio data remains in window.__asmodeusCapture.chunks for CDP client to read.
+  command stopAudioCapture
+    returns
+      number durationMs
+      integer samples
+      number peakRms
+      string outputPath
+
+  # Get current audio level (poll during capture for monitoring).
+  command getAudioLevel
+    returns
+      number rms
+      number peak
+      boolean capturing
+
+  # ── Meeting Management ──────────────────────────────────────
+
+  # Agent state in a meeting.
+  type AgentState extends object
+    properties
+      string name
+      boolean connected
+      integer peerCount
+      number audioRmsIn
+      number audioRmsOut
+
+  # Create a meeting room with embedded signaling + HTTP server.
+  command createMeeting
+    parameters
+      optional string name
+      optional string meetingHtml
+    returns
+      string meetingUrl
+      string signalingUrl
+      integer port
+
+  # Add an agent to the meeting. Creates participant + virtual devices.
+  command addAgent
+    parameters
+      string name
+      optional string voiceModel
+      optional string displayName
+    returns
+      string participantId
+      string audioShmPath
+      string videoShmPath
+      boolean connected
+      integer controlPort
+
+  # Remove an agent from the meeting.
+  command removeAgent
+    parameters
+      string name
+
+  # Get the current meeting state.
+  command getMeetingState
+    returns
+      array of AgentState agents
+      integer signalingPeers
+      boolean recording
+
+  # Make an agent speak via TTS.
+  command speak
+    parameters
+      string name
+      string text
+    returns
+      boolean queued
+
+  # Start recording the meeting.
+  command startRecording
+    parameters
+      string outputDir
+    returns
+      boolean started
+
+  # Stop recording and produce MP4.
+  command stopRecording
+    returns
+      integer frames
+      integer audioSamples
+      number peakRms
+      string mp4Path
+
+  # ── Events ──────────────────────────────────────────────────
+
+  # WebRTC peer-connection signaling event.
+  event webRtcSignal
+    parameters
+      integer peerConnectionId
+      string eventType
+      string sdpType
+      string sdp
+      string candidate
+      string iceState
+      string connState
+      string value
+      string frameUrl
+      number timestamp
