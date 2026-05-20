@@ -2,22 +2,136 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# Asmodeus browser automation components.
-# These are NOT devtools protocol handlers — those live in
-# chrome/browser/devtools/protocol/asmodeus_handler.{h,cc}.
-# This target is for standalone Asmodeus components like
-# auth observers, form detectors, and stealth modules that
-# the handler delegates to.
+import("//testing/test.gni")
 
-source_set("asmodeus") {
+group("asmodeus_all") {
+  deps = [
+    ":asmodeus",
+    ":asmodeus_coordinator",
+    "native_agent:asmodeus_agent",
+    "meeting_cli:asmodeus_meeting",
+  ]
+}
+
+# Meeting server + coordinator core — no Chrome/content deps.
+# Used by both Chrome and the standalone asmodeus_meeting binary.
+source_set("asmodeus_coordinator_core") {
   sources = [
-    "asmodeus_state.cc",
-    "asmodeus_state.h",
+    "asmodeus_meeting_server.cc",
+    "asmodeus_meeting_server.h",
+    "meeting_backend.cc",
+    "meeting_backend.h",
+    "native_meeting_backend.cc",
+    "native_meeting_backend.h",
+    "control_client.cc",
+    "control_client.h",
+    "meeting_coordinator.cc",
+    "meeting_coordinator.h",
+  ]
+
+  deps = [
+    "//base",
+    "//media",
+    "//net",
+    "//skia",
+    "//third_party/libyuv",
+  ]
+}
+
+# General-purpose automation components — no Chrome/content deps.
+# CredentialStore, InstanceManager, DetectAuthPage are pure logic.
+source_set("asmodeus_automation_core") {
+  sources = [
+    "auth_controller.cc",
+    "auth_controller.h",
+    "credential_store.cc",
+    "credential_store.h",
+    "instance_manager.cc",
+    "instance_manager.h",
+    "page_controller.cc",
+    "page_controller.h",
+    "permission_override.cc",
+    "permission_override.h",
+    "totp_generator.cc",
+    "totp_generator.h",
   ]
 
   deps = [
     "//base",
     "//content/public/browser",
+    "//third_party/blink/public/common",
+    "//third_party/boringssl",
+  ]
+}
+
+# Unit tests for automation components.
+test("asmodeus_automation_tests") {
+  sources = [
+    "auth_controller_unittest.cc",
+    "credential_store_unittest.cc",
+    "instance_manager_unittest.cc",
+    "page_controller_unittest.cc",
+    "permission_override_unittest.cc",
+    "totp_generator_unittest.cc",
+  ]
+
+  deps = [
+    ":asmodeus_automation_core",
+    "//base",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//content/public/browser",
+    "//testing/gtest",
+    "//third_party/boringssl",
+  ]
+}
+
+# Browser-specific asmodeus components (needs content/).
+source_set("asmodeus") {
+  sources = [
+    "asmodeus_audio_capture.cc",
+    "asmodeus_audio_capture.h",
+    "asmodeus_participant.cc",
+    "asmodeus_participant.h",
+    "asmodeus_media_server.cc",
+    "asmodeus_media_server.h",
+    "asmodeus_state.cc",
+    "asmodeus_state.h",
+    "asmodeus_url_loader_proxy.cc",
+    "asmodeus_url_loader_proxy.h",
+    "asmodeus_url_throttle.cc",
+    "asmodeus_url_throttle.h",
+  ]
+
+  deps = [
+    ":asmodeus_coordinator_core",
+    "//base",
+    "//content/public/browser",
+    "//media",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//third_party/blink/public/common",
     "//url",
+  ]
+}
+
+# Full coordinator with browser platform support (needs content/).
+# Used by Chrome's CDP handler for browser-based meetings.
+source_set("asmodeus_coordinator") {
+  sources = [
+    "browser_platform.cc",
+    "browser_platform.h",
+  ]
+
+  deps = [
+    ":asmodeus",
+    ":asmodeus_coordinator_core",
+    "//base",
+    "//media",
+    "//net",
+    "//skia",
+    "//third_party/libyuv",
   ]
 }

@@ -1552,6 +1552,7 @@ static_library("browser") {
     "//chrome/browser/data_sharing:impl",
     "//chrome/browser/desktop_to_mobile_promos:utils",
     "//chrome/browser/asmodeus",
+    "//chrome/browser/asmodeus:asmodeus_coordinator",
     "//chrome/browser/devtools",
     "//chrome/browser/diagnostics",
     "//chrome/browser/diagnostics:impl",

@@ -5,6 +5,7 @@
 // Standalone native agent binary for Asmodeus meetings.
 
 #include <csignal>
+#include <fstream>
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
@@ -46,6 +47,12 @@ int main(int argc, char* argv[]) {
   config.voice_model = cmd.GetSwitchValueASCII("voice-model");
   if (config.voice_model.empty())
     config.voice_model = home + "/.asmodeus/voices/en_US-kristin-medium.onnx";
+  // Expand short voice name to full path if needed.
+  if (config.voice_model.find('/') == std::string::npos) {
+    std::string expanded = home + "/.asmodeus/voices/" + config.voice_model + ".onnx";
+    if (access(expanded.c_str(), F_OK) == 0)
+      config.voice_model = expanded;
+  }
   config.piper_path = cmd.GetSwitchValueASCII("piper-path");
   if (config.piper_path.empty())
     config.piper_path = home + "/.asmodeus/venv/bin/piper";
@@ -65,6 +72,29 @@ int main(int argc, char* argv[]) {
   config.signaling_host = cmd.GetSwitchValueASCII("signaling-host");
   if (cmd.HasSwitch("signaling-port"))
     config.signaling_port = std::stoi(cmd.GetSwitchValueASCII("signaling-port"));
+
+  // Load API keys from .env if not already in environment.
+  // Checks ~/.asmodeus/.env then the Legion monorepo .env.
+  if (!getenv("ANTHROPIC_API_KEY") && !getenv("GOOGLE_API_KEY")) {
+    for (const auto& env_path : {
+             home + "/.asmodeus/.env",
+             std::string("/Users/admin/workspace/Legion/.env")}) {
+      std::ifstream env_file(env_path);
+      if (!env_file.is_open()) continue;
+      std::string line;
+      while (std::getline(env_file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        if (key == "ANTHROPIC_API_KEY" || key == "GOOGLE_API_KEY") {
+          setenv(key.c_str(), val.c_str(), 0);
+        }
+      }
+      break;  // Use first .env found
+    }
+  }
 
   signal(SIGINT, SignalHandler);
   signal(SIGTERM, SignalHandler);

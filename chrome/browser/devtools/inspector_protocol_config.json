@@ -67,8 +67,8 @@
             },
             {
               "domain": "Asmodeus",
-              "async": [ "getCredentials", "saveCredentials", "deleteCredentials", "listCredentials", "autoLogin", "exportSession", "importSession" ],
-              "include_events": [ "authFlowDetected", "authFlowCompleted" ]
+              "async": [ "getCredentials", "saveCredentials", "deleteCredentials", "listCredentials", "autoLogin", "exportSession", "importSession", "evaluateInParticipant" ],
+              "include_events": [ "authFlowDetected", "authFlowCompleted", "webRtcSignal", "agentSpoke", "agentSpeechEnded", "agentHeard", "agentBargeIn", "agentSpeakingChanged", "agentError" ]
             }
         ]
     },

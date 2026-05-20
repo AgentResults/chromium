@@ -117,6 +117,11 @@ void ShmAudioDeviceModule::PlayoutLoop() {
   const size_t n_channels = 1;
   const size_t bytes_per_sample = 2;
   std::vector<int16_t> buffer(samples_per_10ms);
+  int loop_count = 0;
+  int nonzero_count = 0;
+
+  LOG(INFO) << "ShmADM: PlayoutLoop started, shm="
+            << playout_shm_path_ << " open=" << playout_ring_.is_open();
 
   while (playing_) {
     if (audio_transport_) {
@@ -132,15 +137,28 @@ void ShmAudioDeviceModule::PlayoutLoop() {
       // Convert int16 → float and write to playout shm.
       if (samples_out > 0) {
         std::vector<float> float_buf(samples_out);
+        double rms = 0;
         for (size_t i = 0; i < samples_out; ++i) {
           float_buf[i] = buffer[i] / 32768.0f;
+          rms += float_buf[i] * float_buf[i];
         }
+        rms = std::sqrt(rms / samples_out);
+        if (rms > 0.001) nonzero_count++;
         playout_ring_.Write(float_buf.data(), samples_out);
       }
     }
 
+    loop_count++;
+    if (loop_count % 500 == 0) {
+      LOG(INFO) << "ShmADM: PlayoutLoop count=" << loop_count
+                << " nonzero=" << nonzero_count
+                << " shm_open=" << playout_ring_.is_open();
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
+  LOG(INFO) << "ShmADM: PlayoutLoop ended, total=" << loop_count
+            << " nonzero=" << nonzero_count;
 }
 
 // === No-op implementations for unused ADM methods ===

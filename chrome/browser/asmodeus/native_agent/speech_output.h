@@ -26,7 +26,7 @@ class SpeechOutput {
 
     std::string piper_path;
     std::string voice_model;
-    float length_scale = 0.85f;
+    float length_scale = 1.0f;
   };
 
   using OnAecReference = std::function<void(const float* samples_16k, int n)>;

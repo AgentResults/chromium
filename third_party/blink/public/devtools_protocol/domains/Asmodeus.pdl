@@ -356,6 +356,75 @@ experimental domain Asmodeus
       integer peerCount
       number audioRmsIn
       number audioRmsOut
+      optional integer heardCount
+      optional integer speechCount
+      optional integer bargeInCount
+      optional string lastHeard
+      optional string lastSpoken
+      optional boolean speaking
+      optional integer speakingFrames
+
+  type TranscriptEntry extends object
+    properties
+      string speaker
+      string text
+      string type
+      number timestampMs
+
+  # ── Meeting monitoring events (push, no polling) ───────
+
+  # Agent started speaking (TTS output beginning).
+  event agentSpoke
+    parameters
+      string name
+      string text
+      string source
+
+  # Agent finished speaking.
+  event agentSpeechEnded
+    parameters
+      string name
+      number durationMs
+
+  # Agent heard speech from another agent (STT result).
+  event agentHeard
+    parameters
+      string name
+      string text
+      integer sttMs
+
+  # Agent was interrupted by another speaker.
+  event agentBargeIn
+    parameters
+      string name
+
+  # Agent's speaking state changed (for lip sync tracking).
+  # Fires only from speech_started/speech_ended events, not RMS ticks.
+  event agentSpeakingChanged
+    parameters
+      string name
+      boolean speaking
+
+  # Agent encountered an error.
+  event agentError
+    parameters
+      string name
+      string message
+
+  # Get the meeting transcript (all speech and heard events).
+  command getTranscript
+    returns
+      array of TranscriptEntry entries
+
+  # Join an external meeting platform (Meet, Teams, Slack, etc.).
+  # Auto-detects platform from URL if not specified.
+  command joinMeeting
+    parameters
+      string url
+      optional string platform
+    returns
+      boolean joined
+      string platform
 
   # Create a meeting room with embedded signaling + HTTP server.
   command createMeeting
@@ -414,6 +483,108 @@ experimental domain Asmodeus
       integer audioSamples
       number peakRms
       string mp4Path
+
+  # ── General-purpose page interaction ────────────────────────
+
+  # Click an element by text content, aria-label, or CSS selector.
+  # method: "text", "textContains", "ariaLabel", "selector"
+  command clickElement
+    parameters
+      string target
+      optional string method
+    returns
+      boolean found
+      optional string elementTag
+      optional string elementText
+
+  # Type text into an element matched by CSS selector.
+  # If no selector, types into the currently focused element.
+  command typeInto
+    parameters
+      string text
+      optional string selector
+    returns
+      boolean success
+
+  # Read text content of an element.
+  command readElement
+    parameters
+      string selector
+    returns
+      optional string text
+      optional string value
+      optional string tag
+
+  # Get current page info.
+  command getPageInfo
+    returns
+      string url
+      string title
+
+  # ── Authentication automation ──────────────────────────────
+
+  # Sign in to Google with stored credentials from accounts.json.
+  command signIn
+    parameters
+      string agentName
+    returns
+      boolean started
+      optional string currentPage
+
+  # Enter a 2FA verification code.
+  command enter2FACode
+    parameters
+      string code
+    returns
+      boolean submitted
+
+  # Get the current authentication state.
+  command getSignInState
+    returns
+      boolean signingIn
+      optional string currentPage
+      optional string agentName
+
+  # ── Permission management ──────────────────────────────────
+
+  # Set auto-grant mode for all permissions (mic, camera, etc.).
+  command setAutoGrantPermissions
+    parameters
+      boolean enabled
+    returns
+      boolean success
+
+  # Grant or deny a specific permission.
+  command setPermission
+    parameters
+      string permission
+      boolean granted
+    returns
+      boolean success
+
+  # ── Instance management ────────────────────────────────────
+
+  # Launch a Chrome instance for an agent with its own profile.
+  command launchInstance
+    parameters
+      string agentName
+      optional string profilePath
+      optional integer port
+    returns
+      integer cdpPort
+      string profilePath
+      string audioInShm
+      string audioOutShm
+
+  # Stop a Chrome instance.
+  command stopInstance
+    parameters
+      string agentName
+
+  # List all running Chrome instances.
+  command listInstances
+    returns
+      array of AgentState instances
 
   # ── Events ──────────────────────────────────────────────────
 

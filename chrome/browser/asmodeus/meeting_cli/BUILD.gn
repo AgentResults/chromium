@@ -1,0 +1,18 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Standalone meeting coordinator binary.
+# Runs native WebRTC meetings without Chrome.
+
+executable("asmodeus_meeting") {
+  sources = [ "main.cc" ]
+
+  deps = [
+    "//chrome/browser/asmodeus:asmodeus_coordinator_core",
+    "//base",
+    "//net",
+    "//skia",
+    "//third_party/libyuv",
+  ]
+}

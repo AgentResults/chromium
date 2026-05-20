@@ -5,6 +5,10 @@
 #ifndef CHROME_BROWSER_ASMODEUS_ASMODEUS_STATE_H_
 #define CHROME_BROWSER_ASMODEUS_ASMODEUS_STATE_H_
 
+#include <string>
+#include <utility>
+#include <vector>
+
 // Global Asmodeus state flags. Checked by various Chrome subsystems
 // to suppress browser UI when the agent is in control.
 //
@@ -21,9 +25,28 @@ namespace asmodeus {
 // - Debugger infobar
 // - "Save password?" bubble
 bool IsSuppressed();
-
-// Set the suppression state. Called by AsmodeusHandler::SuppressFingerprints.
 void SetSuppressed(bool suppressed);
+
+// ── Virtual audio device registry ─────────────────────────────────
+// Thread-safe registry of named virtual audio devices. Each device has
+// a unique name and shm path. Used by AudioManagerMac to enumerate
+// and create virtual microphone streams.
+
+// Register a named virtual audio device with its shm input path.
+void RegisterVirtualDevice(const std::string& name,
+                           const std::string& shm_path);
+
+// Unregister a named virtual audio device.
+void UnregisterVirtualDevice(const std::string& name);
+
+// Get the shm path for a named device. Returns empty if not found.
+std::string GetVirtualDevicePath(const std::string& name);
+
+// Get all registered virtual devices as (name, shm_path) pairs.
+std::vector<std::pair<std::string, std::string>> GetVirtualDevices();
+
+// Check if any virtual devices are registered.
+bool HasVirtualDevices();
 
 }  // namespace asmodeus
 

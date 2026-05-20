@@ -153,6 +153,8 @@ class ConversationEngine {
   std::string SttTranscribe();
   void SttReset();
 
+  uint64_t last_voice_frame_ = 0;
+  uint64_t silence_threshold_ = 0;  // Computed per-agent from name hash
   std::thread audio_thread_;
   std::thread speech_worker_;
 

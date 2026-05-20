@@ -110,6 +110,25 @@ DialogueAction DialogueManager::OnUtteranceHeard(const std::string& text,
     participants_copy = participants_;
   }
 
+  // Silence timeout — generate a new topic directly via LLM.
+  if (text.find("[SILENCE_TIMEOUT:") == 0 && llm_policy_) {
+    LOG(INFO) << "[" << config_.my_name << "] Silence timeout — asking LLM for new topic";
+    DialogueAction action = llm_policy_->Evaluate(
+        transcript_copy, text, config_.my_name,
+        config_.personality +
+            "\n\nThe meeting has gone silent. You should bring up a new topic, "
+            "ask a follow-up question, or summarize what was discussed. "
+            "You MUST respond with something to keep the meeting going. "
+            "ONE sentence only.",
+        participants_copy);
+    if (action.should_respond && !action.response_text.empty()) {
+      LOG(INFO) << "[" << config_.my_name << "] RESPOND (new topic): "
+                << action.response_text;
+      return action;
+    }
+    return {false, "", "LLM declined to initiate"};
+  }
+
   // Stage 1: Fast policy (AdjacencyPairPolicy).
   DialogueAction fast_action = fast_policy_->Evaluate(
       transcript_copy, text, config_.my_name,
@@ -122,22 +141,36 @@ DialogueAction DialogueManager::OnUtteranceHeard(const std::string& text,
     return fast_action;
   }
 
-  // Adjacency pair completion: I asked, they answered. Skip RESPOND/SILENT
-  // decision and generate a follow-up directly (faster — no decision overhead).
+  // Adjacency pair completion: I asked, they answered.
+  // Only trigger if I haven't spoken in the last 2 transcript entries
+  // (prevents infinite follow-up loops where my follow-up triggers
+  // another response which triggers another follow-up).
   if (fast_action.reason == "my question was answered" && llm_policy_) {
+    // Check if I spoke very recently (last 2 entries) — if so, skip follow-up
+    bool spoke_very_recently = false;
+    if (transcript_copy.size() >= 3) {
+      size_t check_start = transcript_copy.size() - 3;
+      for (size_t i = check_start; i < transcript_copy.size() - 1; ++i) {
+        if (ContainsIgnoreCase(transcript_copy[i].speaker, config_.my_name)) {
+          spoke_very_recently = true;
+          break;
+        }
+      }
+    }
+    if (spoke_very_recently) {
+      LOG(INFO) << "[" << config_.my_name
+                << "] SILENT: adjacency pair but spoke very recently (avoiding loop)";
+      return {false, "", "spoke very recently, avoiding follow-up loop"};
+    }
     LOG(INFO) << "[" << config_.my_name
-              << "] Adjacency pair complete — generating follow-up directly";
-    // Use LLM but with a simpler prompt — we KNOW we should respond,
-    // just need to generate WHAT to say.
+              << "] Adjacency pair complete — generating follow-up";
     DialogueAction follow_up = llm_policy_->Evaluate(
         transcript_copy, text, config_.my_name,
         config_.personality +
             "\n\nThe previous speaker just answered YOUR question. "
-            "Briefly acknowledge and continue the meeting. "
-            "You MUST respond — do not output SILENT.",
+            "Briefly acknowledge and move on. ONE short sentence only.",
         participants_copy);
     if (!follow_up.should_respond || follow_up.response_text.empty()) {
-      // LLM didn't cooperate — force a response.
       follow_up.should_respond = true;
       follow_up.response_text = "Thank you for that update.";
       follow_up.reason = "adjacency pair forced";

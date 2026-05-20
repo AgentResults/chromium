@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "content/public/browser/browser_thread.h"
@@ -19,6 +20,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/asmodeus/asmodeus_state.h"
+#include "chrome/browser/asmodeus/browser_platform.h"
+#include "chrome/browser/asmodeus/totp_generator.h"
 #include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -125,6 +128,19 @@ AsmodeusHandler::AsmodeusHandler(protocol::UberDispatcher* dispatcher,
   if (web_contents_) {
     Observe(web_contents_);
   }
+  // Initialize automation components
+  credential_store_.LoadDefault();
+  if (credential_store_.size() > 0) {
+    auth_controller_ =
+        std::make_unique<asmodeus::AuthController>(credential_store_);
+  }
+  // Determine Chrome binary path for instance manager
+  const char* home = getenv("HOME");
+  std::string chrome_path = home
+      ? std::string(home) + "/workspace/chromium/src/out/Default/Chromium.app/Contents/MacOS/Chromium"
+      : "";
+  instance_manager_ =
+      std::make_unique<asmodeus::InstanceManager>(chrome_path);
 }
 
 AsmodeusHandler::~AsmodeusHandler() {
@@ -350,36 +366,11 @@ std::vector<uint8_t> AsmodeusHandler::Base32Decode(const std::string& input) {
 std::string AsmodeusHandler::ComputeTOTP(const std::string& base32_secret,
                                          int digits, int period,
                                          int64_t* remaining_seconds) {
-  auto key = Base32Decode(base32_secret);
-  if (key.empty()) return "";
-
-  int64_t now = static_cast<int64_t>(
-      base::Time::Now().InSecondsFSinceUnixEpoch());
-  int64_t counter = now / period;
-  if (remaining_seconds) *remaining_seconds = period - (now % period);
-
-  std::array<uint8_t, 8> counter_bytes;
-  int64_t tmp = counter;
-  for (int i = 7; i >= 0; --i) {
-    counter_bytes[static_cast<size_t>(i)] = static_cast<uint8_t>(tmp & 0xFF);
-    tmp >>= 8;
+  // Delegate to TotpGenerator (shared with AuthController).
+  if (remaining_seconds) {
+    *remaining_seconds = asmodeus::TotpGenerator::SecondsRemaining(period);
   }
-
-  auto hash = crypto::hmac::SignSha1(key, counter_bytes);
-
-  int offset = hash[19] & 0x0F;
-  int32_t code = ((hash[offset] & 0x7F) << 24) |
-                 ((hash[offset + 1] & 0xFF) << 16) |
-                 ((hash[offset + 2] & 0xFF) << 8) |
-                 (hash[offset + 3] & 0xFF);
-
-  int modulo = 1;
-  for (int i = 0; i < digits; ++i) modulo *= 10;
-  code %= modulo;
-
-  std::string result = std::to_string(code);
-  while (static_cast<int>(result.length()) < digits) result = "0" + result;
-  return result;
+  return asmodeus::TotpGenerator::Generate(base32_secret, digits, period);
 }
 
 DispatchResponse AsmodeusHandler::GenerateTOTP(
@@ -446,9 +437,17 @@ void AsmodeusHandler::DidStartNavigation(
 
 void AsmodeusHandler::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!enabled_ || active_flows_.empty() ||
-      !navigation_handle->IsInPrimaryMainFrame() ||
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
       !navigation_handle->HasCommitted())
+    return;
+
+  // AuthController: auto-handle Google sign-in pages
+  if (auth_controller_ && web_contents_) {
+    std::string url = navigation_handle->GetURL().spec();
+    auth_controller_->HandleNavigation(web_contents_, url);
+  }
+
+  if (!enabled_ || active_flows_.empty())
     return;
 
   std::string current =
@@ -1131,6 +1130,95 @@ void AsmodeusHandler::OnPeerConnectionUpdated(
 
 // ── Meeting Management ─────────────────────────────────────────
 
+DispatchResponse AsmodeusHandler::JoinMeeting(
+    const String& in_url,
+    std::optional<String> in_platform,
+    bool* out_joined,
+    String* out_platform) {
+  std::string url = in_url;
+  std::string platform = in_platform.has_value()
+      ? std::string(in_platform.value())
+      : asmodeus::BrowserPlatform::DetectPlatform(url);
+
+  if (platform == "unknown") {
+    *out_joined = false;
+    *out_platform = "unknown";
+    return DispatchResponse::ServerError(
+        "Unknown platform. Provide 'platform' parameter.");
+  }
+
+  // Stop old coordinator if any
+  if (coordinator_) {
+    coordinator_->Stop();
+    coordinator_.reset();
+  }
+
+  std::string home = getenv("HOME") ? getenv("HOME") : "/tmp";
+  std::string agent_path = home + "/workspace/chromium/src/out/Default/asmodeus_agent";
+
+  // Create coordinator with browser platform backend
+  coordinator_ = std::make_unique<asmodeus::MeetingCoordinator>();
+  auto browser_backend = std::make_unique<asmodeus::BrowserPlatform>(
+      platform, web_contents_->GetBrowserContext());
+  browser_backend->Start(url);
+  coordinator_->StartWithBackend(std::move(browser_backend), agent_path);
+
+  // Register event callback (same as createMeeting)
+  coordinator_->SetEventCallback(
+      [this](const std::string& agent, const std::string& event_type,
+             const base::Value& data) {
+        if (!data.is_dict()) return;
+        const auto& dict = data.GetDict();
+        if (event_type == "speech_started") {
+          const std::string* text = dict.FindString("text");
+          const std::string* source = dict.FindString("source");
+          frontend_->AgentSpoke(agent, text ? *text : "", source ? *source : "tts");
+          frontend_->AgentSpeakingChanged(agent, true);
+        } else if (event_type == "speech_ended") {
+          auto dur = dict.FindDouble("durationMs");
+          frontend_->AgentSpeechEnded(agent, dur ? *dur : 0);
+          frontend_->AgentSpeakingChanged(agent, false);
+        } else if (event_type == "heard") {
+          const std::string* text = dict.FindString("text");
+          auto stt_ms = dict.FindInt("sttMs");
+          frontend_->AgentHeard(agent, text ? *text : "", stt_ms ? *stt_ms : 0);
+        } else if (event_type == "barge_in") {
+          frontend_->AgentBargeIn(agent);
+        } else if (event_type == "error") {
+          const std::string* msg = dict.FindString("message");
+          frontend_->AgentError(agent, msg ? *msg : "unknown");
+        }
+      });
+
+  // Auto-admit: inject a script into the host tab that clicks "Admit"
+  // buttons whenever they appear (for incognito agent participants).
+  if (web_contents_) {
+    std::string auto_admit_src =
+        "(function() {"
+        "  if (window.__asmodeusAdmitInterval) clearInterval(window.__asmodeusAdmitInterval);"
+        "  window.__asmodeusAdmitInterval = setInterval(function() {"
+        "    var btns = document.querySelectorAll('button, [role=\"button\"]');"
+        "    for (var i = 0; i < btns.length; i++) {"
+        "      var t = (btns[i].textContent || '').trim().toLowerCase();"
+        "      if (t === 'admit' || t === 'let in' || t === 'accept' || t === 'admit all') {"
+        "        console.log('[Asmodeus] Auto-admitting: ' + btns[i].textContent.trim());"
+        "        btns[i].click();"
+        "      }"
+        "    }"
+        "  }, 2000);"
+        "  console.log('[Asmodeus] Auto-admit enabled');"
+        "})();";
+    std::u16string auto_admit_js(auto_admit_src.begin(), auto_admit_src.end());
+    web_contents_->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
+        auto_admit_js, base::NullCallback(), /*world_id=*/0);
+  }
+
+  *out_joined = true;
+  *out_platform = platform;
+  LOG(INFO) << "JoinMeeting: platform=" << platform << " url=" << url;
+  return DispatchResponse::Success();
+}
+
 DispatchResponse AsmodeusHandler::CreateMeeting(
     std::optional<String> in_name,
     std::optional<String> in_meetingHtml,
@@ -1164,10 +1252,37 @@ DispatchResponse AsmodeusHandler::CreateMeeting(
     return DispatchResponse::ServerError("Failed to start meeting server");
   }
 
-  // Also create the new meeting coordinator (native agent system).
+  // Also create the new meeting coordinator (native meeting backend).
   std::string home = getenv("HOME") ? getenv("HOME") : "/tmp";
   std::string agent_path = home + "/workspace/chromium/src/out/Default/asmodeus_agent";
   coordinator_ = std::make_unique<asmodeus::MeetingCoordinator>();
+  coordinator_->SetEventCallback(
+      [this](const std::string& agent, const std::string& event_type,
+             const base::Value& data) {
+        if (!data.is_dict()) return;
+        const auto& dict = data.GetDict();
+        if (event_type == "speech_started") {
+          const std::string* text = dict.FindString("text");
+          const std::string* source = dict.FindString("source");
+          frontend_->AgentSpoke(agent, text ? *text : "",
+                                source ? *source : "tts");
+          frontend_->AgentSpeakingChanged(agent, true);
+        } else if (event_type == "speech_ended") {
+          auto dur = dict.FindDouble("durationMs");
+          frontend_->AgentSpeechEnded(agent, dur ? *dur : 0);
+          frontend_->AgentSpeakingChanged(agent, false);
+        } else if (event_type == "heard") {
+          const std::string* text = dict.FindString("text");
+          auto stt_ms = dict.FindInt("sttMs");
+          frontend_->AgentHeard(agent, text ? *text : "",
+                                stt_ms ? *stt_ms : 0);
+        } else if (event_type == "barge_in") {
+          frontend_->AgentBargeIn(agent);
+        } else if (event_type == "error") {
+          const std::string* msg = dict.FindString("message");
+          frontend_->AgentError(agent, msg ? *msg : "unknown");
+        }
+      });
   coordinator_->Start(name, agent_path);
 
   *out_meetingUrl = meeting_server_->GetMeetingUrl();
@@ -1191,17 +1306,18 @@ DispatchResponse AsmodeusHandler::AddAgent(
   if (coordinator_) {
     std::string home = getenv("HOME") ? getenv("HOME") : "/tmp";
     // Assign different voices per agent for variety.
-    static const char* kVoices[] = {
-        "en_US-amy-medium.onnx",       // female
-        "en_US-ryan-high.onnx",        // male
-        "en_US-kristin-medium.onnx",   // female
-        "en_US-joe-medium.onnx",       // male
-        "en_US-kusal-medium.onnx",     // male
-        "en_US-norman-medium.onnx",    // male
+    const char* voices[] = {
+        "en_US-amy-medium.onnx",
+        "en_US-ryan-high.onnx",
+        "en_US-kristin-medium.onnx",
+        "en_US-joe-medium.onnx",
+        "en_US-kusal-medium.onnx",
+        "en_US-norman-medium.onnx",
     };
     static int voice_idx = 0;
-    std::string default_voice = home + "/.asmodeus/voices/" +
-        kVoices[voice_idx++ % 6];
+    // SAFETY: voice_idx % 6 is always in [0,5], matching array size.
+    UNSAFE_BUFFERS(std::string default_voice = home + "/.asmodeus/voices/" +
+        voices[voice_idx++ % 6]);
     std::string voice = in_voiceModel.value_or(default_voice);
     std::string display = in_displayName.value_or(
         std::string(1, toupper(name[0])) + name.substr(1));
@@ -1326,6 +1442,15 @@ DispatchResponse AsmodeusHandler::GetMeetingState(
           .SetAudioRmsIn(entry.rms)
           .SetAudioRmsOut(0)
           .Build();
+      state->SetHeardCount(entry.heard_count);
+      state->SetSpeechCount(entry.speech_count);
+      state->SetBargeInCount(entry.barge_in_count);
+      if (!entry.last_heard.empty())
+        state->SetLastHeard(entry.last_heard);
+      if (!entry.last_spoken.empty())
+        state->SetLastSpoken(entry.last_spoken);
+      state->SetSpeaking(entry.speaking);
+      state->SetSpeakingFrames(entry.speaking_frames);
       agents->push_back(std::move(state));
     }
   }
@@ -1333,6 +1458,26 @@ DispatchResponse AsmodeusHandler::GetMeetingState(
   *out_agents = std::move(agents);
   *out_signalingPeers = meeting_server_ ? meeting_server_->GetPeerCount() : 0;
   *out_recording = coordinator_ ? coordinator_->is_recording() : false;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::GetTranscript(
+    std::unique_ptr<protocol::Array<protocol::Asmodeus::TranscriptEntry>>*
+        out_entries) {
+  auto entries =
+      std::make_unique<protocol::Array<protocol::Asmodeus::TranscriptEntry>>();
+  if (coordinator_) {
+    for (const auto& t : coordinator_->transcript()) {
+      auto entry = protocol::Asmodeus::TranscriptEntry::Create()
+          .SetSpeaker(t.speaker)
+          .SetText(t.text)
+          .SetType(t.type)
+          .SetTimestampMs(t.timestamp_ms)
+          .Build();
+      entries->push_back(std::move(entry));
+    }
+  }
+  *out_entries = std::move(entries);
   return DispatchResponse::Success();
 }
 
@@ -1367,5 +1512,214 @@ DispatchResponse AsmodeusHandler::StopRecording(int* out_frames,
   coordinator_->StopRecording(out_frames, &samples, out_peakRms, &mp4);
   *out_audioSamples = static_cast<int>(samples);
   *out_mp4Path = mp4;
+  return DispatchResponse::Success();
+}
+
+// ── General-purpose page interaction ──────────────────────────────
+
+DispatchResponse AsmodeusHandler::ClickElement(
+    const String& in_target,
+    std::optional<String> in_method,
+    bool* out_found,
+    std::optional<String>* out_elementTag,
+    std::optional<String>* out_elementText) {
+  if (!web_contents_) {
+    return DispatchResponse::ServerError("No WebContents");
+  }
+  asmodeus::FindMethod method = asmodeus::FindMethod::kText;
+  if (in_method.has_value()) {
+    if (*in_method == "textContains") method = asmodeus::FindMethod::kTextContains;
+    else if (*in_method == "ariaLabel") method = asmodeus::FindMethod::kAriaLabel;
+    else if (*in_method == "selector") method = asmodeus::FindMethod::kSelector;
+  }
+  auto result = page_controller_.Click(web_contents_, in_target, method);
+  *out_found = result.success;
+  *out_elementTag = result.element_tag;
+  *out_elementText = result.element_text;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::TypeInto(
+    const String& in_text,
+    std::optional<String> in_selector,
+    bool* out_success) {
+  if (!web_contents_) {
+    return DispatchResponse::ServerError("No WebContents");
+  }
+  auto result = page_controller_.Type(
+      web_contents_, in_text, in_selector.value_or(""));
+  *out_success = result.success;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::ReadElement(
+    const String& in_selector,
+    std::optional<String>* out_text,
+    std::optional<String>* out_value,
+    std::optional<String>* out_tag) {
+  if (!web_contents_) {
+    return DispatchResponse::ServerError("No WebContents");
+  }
+  auto result = page_controller_.Read(web_contents_, in_selector);
+  *out_text = result.element_text;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::GetPageInfo(
+    String* out_url,
+    String* out_title) {
+  if (!web_contents_) {
+    return DispatchResponse::ServerError("No WebContents");
+  }
+  *out_url = page_controller_.GetURL(web_contents_);
+  *out_title = page_controller_.GetTitle(web_contents_);
+  return DispatchResponse::Success();
+}
+
+// ── Authentication automation ─────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::SignIn(
+    const String& in_agentName,
+    bool* out_started,
+    std::optional<String>* out_currentPage) {
+  if (!auth_controller_) {
+    return DispatchResponse::ServerError(
+        "No credentials loaded from ~/.asmodeus/accounts.json");
+  }
+  auth_controller_->SetAccount(in_agentName);
+  if (web_contents_) {
+    std::string url = web_contents_->GetLastCommittedURL().spec();
+    auth_controller_->HandleNavigation(web_contents_, url);
+  }
+  *out_started = auth_controller_->is_signing_in();
+  *out_currentPage = std::to_string(
+      static_cast<int>(auth_controller_->current_page()));
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::Enter2FACode(
+    const String& in_code,
+    bool* out_submitted) {
+  if (!auth_controller_ || !web_contents_) {
+    return DispatchResponse::ServerError("No auth controller or WebContents");
+  }
+  auth_controller_->Enter2FACode(web_contents_, in_code);
+  *out_submitted = true;
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::GetSignInState(
+    bool* out_signingIn,
+    std::optional<String>* out_currentPage,
+    std::optional<String>* out_agentName) {
+  if (!auth_controller_) {
+    *out_signingIn = false;
+    return DispatchResponse::Success();
+  }
+  *out_signingIn = auth_controller_->is_signing_in();
+  *out_currentPage = std::to_string(
+      static_cast<int>(auth_controller_->current_page()));
+  return DispatchResponse::Success();
+}
+
+// ── Permission management ─────────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::SetAutoGrantPermissions(
+    bool in_enabled,
+    bool* out_success) {
+  permission_override_.SetAutoGrant(in_enabled);
+  *out_success = true;
+  LOG(INFO) << "[Asmodeus] Auto-grant permissions: "
+            << (in_enabled ? "ON" : "OFF");
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::SetPermission(
+    const String& in_permission,
+    bool in_granted,
+    bool* out_success) {
+  auto perm = asmodeus::ParsePermission(in_permission);
+  if (in_granted) {
+    permission_override_.Grant(perm);
+  } else {
+    permission_override_.Deny(perm);
+  }
+  *out_success = true;
+  LOG(INFO) << "[Asmodeus] Permission " << in_permission
+            << (in_granted ? " GRANTED" : " DENIED");
+  return DispatchResponse::Success();
+}
+
+// ── Instance management ───────────────────────────────────────────
+
+DispatchResponse AsmodeusHandler::LaunchInstance(
+    const String& in_agentName,
+    std::optional<String> in_profilePath,
+    std::optional<int> in_port,
+    int* out_cdpPort,
+    String* out_profilePath,
+    String* out_audioInShm,
+    String* out_audioOutShm) {
+  if (!instance_manager_) {
+    return DispatchResponse::ServerError("No instance manager");
+  }
+  // Determine profile path
+  std::string profile_path;
+  if (in_profilePath.has_value()) {
+    profile_path = *in_profilePath;
+  } else {
+    auto acct = credential_store_.GetByName(in_agentName);
+    if (acct && !acct->profile.empty()) {
+      profile_path = acct->profile;
+    } else {
+      const char* home = getenv("HOME");
+      profile_path = home
+          ? std::string(home) + "/.asmodeus/profiles/" + in_agentName
+          : "/tmp/asmodeus-profile-" + in_agentName;
+    }
+  }
+
+  int port = instance_manager_->Launch(
+      in_agentName, profile_path, in_port.value_or(0));
+  if (port < 0) {
+    return DispatchResponse::ServerError("Failed to launch Chrome instance");
+  }
+
+  auto* info = instance_manager_->Get(in_agentName);
+  *out_cdpPort = port;
+  *out_profilePath = profile_path;
+  *out_audioInShm = info ? info->audio_in_shm : "";
+  *out_audioOutShm = info ? info->audio_out_shm : "";
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::StopInstance(
+    const String& in_agentName) {
+  if (!instance_manager_) {
+    return DispatchResponse::ServerError("No instance manager");
+  }
+  instance_manager_->Stop(in_agentName);
+  return DispatchResponse::Success();
+}
+
+DispatchResponse AsmodeusHandler::ListInstances(
+    std::unique_ptr<protocol::Array<protocol::Asmodeus::AgentState>>*
+        out_instances) {
+  *out_instances =
+      std::make_unique<protocol::Array<protocol::Asmodeus::AgentState>>();
+  if (!instance_manager_) return DispatchResponse::Success();
+
+  for (const auto& info : instance_manager_->List()) {
+    auto state = protocol::Asmodeus::AgentState::Create()
+        .SetName(info.agent_name)
+        .SetConnected(info.status == asmodeus::InstanceStatus::kRunning)
+        .SetPeerCount(0)
+        .SetAudioRmsIn(0.0)
+        .SetAudioRmsOut(0.0)
+        .SetSpeechCount(0)
+        .SetHeardCount(0)
+        .Build();
+    (*out_instances)->emplace_back(std::move(state));
+  }
   return DispatchResponse::Success();
 }

@@ -380,6 +380,19 @@ void ConversationEngine::SpeechWorkerFn(std::string text, bool is_scripted) {
     return;
   }
 
+  // Random jitter before responding. Uses name hash for a per-agent
+  // base offset (0-2s) plus random (0-1s). This gives each agent a
+  // distinct response window, preventing simultaneous identical responses.
+  // The agent that starts first triggers the other's listen-before-speak.
+  {
+    uint32_t h = 0;
+    for (char c : config_.my_name) h = h * 31 + c;
+    int base_ms = (h % 2000);  // 0-2000ms per-agent offset
+    int rand_ms = rand() % 1000;  // 0-1000ms random
+    int jitter_ms = base_ms + rand_ms;
+    std::this_thread::sleep_for(std::chrono::milliseconds(jitter_ms));
+  }
+
   // Listen-before-speak: did someone else start talking while we were thinking?
   if (vad_in_speech_) {
     LOG(INFO) << "[" << config_.my_name << "] Yielding — someone else speaking";
@@ -467,6 +480,9 @@ void ConversationEngine::AudioLoop() {
       VadEvent ev = FeedVad(vad_buf.data(), kVadWindowSamples);
       vad_buf.erase(vad_buf.begin(), vad_buf.begin() + kVadWindowSamples);
 
+      if (ev == VadEvent::SpeechStart || ev == VadEvent::SpeechEnd) {
+        last_voice_frame_ = frames_read;
+      }
       if (ev == VadEvent::SpeechStart) {
         if (state_.load() == State::Speaking || state_.load() == State::Thinking) {
           OnBargeIn();
@@ -485,6 +501,34 @@ void ConversationEngine::AudioLoop() {
           OnUtterance(text, static_cast<int>(stt_ms), ts);
         }
       }
+    }
+
+    // Silence-triggered topic initiation.
+    // Each agent has a different timeout based on name hash to prevent
+    // all agents from initiating simultaneously. Range: 8-20 seconds.
+    // Agents who spoke recently get longer timeouts (fairness).
+    if (silence_threshold_ == 0) {
+      // Compute once: hash name to get a per-agent offset
+      uint32_t h = 0;
+      for (char c : config_.my_name) h = h * 31 + c;
+      silence_threshold_ = 800 + (h % 1200);  // 800-2000 frames (8-20s)
+    }
+    if (frames_read > 0 && last_voice_frame_ > 0 &&
+        (frames_read - last_voice_frame_) > silence_threshold_ &&
+        state_.load() == State::Listening &&
+        !vad_in_speech_ &&
+        dialogue_ && dialogue_->transcript_size() > 0) {
+      last_voice_frame_ = frames_read;  // Reset so we don't trigger again
+      // Increase threshold after each initiation (back off)
+      silence_threshold_ += 500;  // +5 seconds per initiation
+      LOG(INFO) << "[" << config_.my_name
+                << "] Silence timeout — initiating topic (next threshold="
+                << silence_threshold_ << ")";
+      if (speech_worker_.joinable()) speech_worker_.join();
+      speech_worker_ = std::thread(
+          &ConversationEngine::SpeechWorkerFn, this,
+          "[SILENCE_TIMEOUT: It's been quiet. Bring up a new topic or ask a follow-up question.]",
+          false);
     }
 
     if (frames_read % 100 == 0) {

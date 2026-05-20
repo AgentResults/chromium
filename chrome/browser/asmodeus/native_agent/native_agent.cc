@@ -67,12 +67,12 @@ bool NativeAgent::Init() {
   start_time_ = base::TimeTicks::Now();
   main_runner_ = base::SequencedTaskRunner::GetCurrentDefault();
 
-  if (!audio_buffer_.Create(config_.audio_shm_path, 48000, 1, 48000 * 10)) {
-    LOG(ERROR) << "[" << config_.name << "] Failed to create audio-in shm";
+  if (!audio_buffer_.CreateIfNeeded(config_.audio_shm_path, 48000, 1, 48000 * 10)) {
+    LOG(ERROR) << "[" << config_.name << "] Failed to open/create audio-in shm";
     return false;
   }
-  if (!audio_out_buffer_.Create(config_.audio_out_shm_path, 48000, 1, 48000 * 10)) {
-    LOG(ERROR) << "[" << config_.name << "] Failed to create audio-out shm";
+  if (!audio_out_buffer_.CreateIfNeeded(config_.audio_out_shm_path, 48000, 1, 48000 * 10)) {
+    LOG(ERROR) << "[" << config_.name << "] Failed to open/create audio-out shm";
     return false;
   }
 
@@ -160,9 +160,50 @@ void NativeAgent::InitConversation() {
   cb.on_heard = [this](const std::string& text, int stt_ms) {
     LOG(INFO) << "[" << config_.name << "] Heard: " << text
               << " (" << stt_ms << "ms)";
+    base::DictValue evt;
+    evt.Set("event", "heard");
+    evt.Set("text", text);
+    evt.Set("sttMs", stt_ms);
+    std::string json;
+    base::JSONWriter::Write(evt, &json);
+    control_.EmitEvent(json);
+  };
+  cb.on_speaking = [this](const std::string& text, const std::string& source) {
+    LOG(INFO) << "[" << config_.name << "] Speaking: " << text;
+    base::DictValue evt;
+    evt.Set("event", "speech_started");
+    evt.Set("text", text);
+    evt.Set("source", source);
+    std::string json;
+    base::JSONWriter::Write(evt, &json);
+    control_.EmitEvent(json);
+  };
+  cb.on_speech_ended = [this](const std::string& text, double duration_ms) {
+    LOG(INFO) << "[" << config_.name << "] Speech ended: " << duration_ms << "ms";
+    base::DictValue evt;
+    evt.Set("event", "speech_ended");
+    evt.Set("text", text);
+    evt.Set("durationMs", duration_ms);
+    std::string json;
+    base::JSONWriter::Write(evt, &json);
+    control_.EmitEvent(json);
+  };
+  cb.on_barge_in = [this]() {
+    LOG(INFO) << "[" << config_.name << "] Barge-in!";
+    base::DictValue evt;
+    evt.Set("event", "barge_in");
+    std::string json;
+    base::JSONWriter::Write(evt, &json);
+    control_.EmitEvent(json);
   };
   cb.on_error = [this](const std::string& err) {
     LOG(ERROR) << "[" << config_.name << "] ConversationEngine error: " << err;
+    base::DictValue evt;
+    evt.Set("event", "error");
+    evt.Set("message", err);
+    std::string json;
+    base::JSONWriter::Write(evt, &json);
+    control_.EmitEvent(json);
   };
 
   conversation_ = std::make_unique<ConversationEngine>(
