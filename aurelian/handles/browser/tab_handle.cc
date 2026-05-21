@@ -7,12 +7,16 @@
 #include <map>
 #include <string>
 
+#include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "velite/agentspaces-wire/actorspace.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -397,6 +401,67 @@ int RunC1SelfTest() {
                << (failures == 0 ? "ALL PASS" : "FAILURES: ")
                << (failures > 0 ? base::NumberToString(failures) : "");
   return failures;
+}
+
+// ---------------------------------------------------------------------------
+// C2 self-test — dispatches "describe" to the renderer via Mojo
+// ---------------------------------------------------------------------------
+void RunC2SelfTest() {
+  if (Registry().empty()) {
+    LOG(WARNING) << "[aurelian-c2] FAIL: no tabs in registry for C2 test";
+    return;
+  }
+
+  auto& [id, entry] = *Registry().begin();
+  if (!entry.wc) {
+    LOG(WARNING) << "[aurelian-c2] FAIL: WebContents is null";
+    return;
+  }
+
+  content::RenderFrameHost* rfh = entry.wc->GetPrimaryMainFrame();
+  if (!rfh) {
+    LOG(WARNING) << "[aurelian-c2] FAIL: no primary main frame";
+    return;
+  }
+
+  LOG(WARNING) << "[aurelian-c2] dispatching 'describe' to renderer frame "
+               << rfh->GetRoutingID() << "...";
+
+  // Use a leaked remote so the pipe stays alive for the async reply.
+  auto* wire = new mojo::AssociatedRemote<aurelian::mojom::AurelianWire>();
+  rfh->GetRemoteAssociatedInterfaces()->GetInterface(wire);
+
+  if (!wire->is_bound()) {
+    LOG(WARNING) << "[aurelian-c2] FAIL: AurelianWire not bound";
+    delete wire;
+    return;
+  }
+
+  LOG(WARNING) << "[aurelian-c2] PASS: AurelianWire bound to renderer";
+
+  // Send "describe" as the envelope.
+  std::string verb = "describe";
+  std::vector<uint8_t> envelope(verb.begin(), verb.end());
+
+  (*wire)->Dispatch(
+      envelope,
+      base::BindOnce([](mojo::AssociatedRemote<aurelian::mojom::AurelianWire>*
+                            owned_wire,
+                        const std::vector<uint8_t>& reply) {
+                       std::string reply_str(reply.begin(), reply.end());
+                       if (reply_str.find("renderer") != std::string::npos) {
+                         LOG(WARNING)
+                             << "[aurelian-c2] PASS: renderer replied: "
+                             << reply_str;
+                       } else {
+                         LOG(WARNING)
+                             << "[aurelian-c2] FAIL: unexpected reply: "
+                             << reply_str;
+                       }
+                       LOG(WARNING) << "[aurelian-c2] self-test complete";
+                       delete owned_wire;
+                     },
+                     wire));
 }
 
 }  // namespace aurelian

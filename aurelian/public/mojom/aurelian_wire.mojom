@@ -1,0 +1,16 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// Aurelian wire protocol — Velite AgentSpaces envelopes over Mojo.
+// Per AURELIAN-DESIGN.md §6.
+
+module aurelian.mojom;
+
+// Per-frame wire interface. Associated (not plain) so Dispatch
+// ordering is preserved relative to navigation IPC.
+interface AurelianWire {
+  // Dispatch an AgentSpaces envelope. The envelope and reply are
+  // opaque byte arrays (simplified for C2; full CBOR in later slices).
+  Dispatch(array<uint8> envelope) => (array<uint8> reply);
+};

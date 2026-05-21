@@ -35,6 +35,10 @@ std::unique_ptr<TabsHandleImpl> CreateTabsHandle();
 // C1 self-test — returns number of failed assertions.
 int RunC1SelfTest();
 
+// C2 self-test — dispatches to renderer via Mojo, logs results.
+// Async: posts results as [aurelian-c2] log lines.
+void RunC2SelfTest();
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_TAB_HANDLE_H_

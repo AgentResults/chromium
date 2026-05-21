@@ -200,7 +200,7 @@ void BrowserMainExtra::PreBrowserStart() {
 }
 
 void BrowserMainExtra::PostBrowserStart() {
-  // Schedule C1 self-test after a short delay so the initial tab is loaded.
+  // Schedule self-tests after a delay so the initial tab + renderer are ready.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, base::BindOnce([]() {
         int failures = RunC1SelfTest();
@@ -208,6 +208,8 @@ void BrowserMainExtra::PostBrowserStart() {
           LOG(ERROR) << "[aurelian-c1] SELF-TEST FAILED: " << failures
                      << " assertion(s)";
         }
+        // C2: test cross-process Mojo dispatch to renderer.
+        RunC2SelfTest();
       }),
       base::Seconds(3));
 }
