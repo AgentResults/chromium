@@ -5,16 +5,21 @@
 #ifndef AURELIAN_RENDERER_AURELIAN_RENDER_FRAME_OBSERVER_H_
 #define AURELIAN_RENDERER_AURELIAN_RENDER_FRAME_OBSERVER_H_
 
+#include <memory>
+#include <string>
+
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 
+namespace blink {
+class WebElement;
+}
+
 namespace aurelian {
 
-// Per-frame Mojo handler. Binds AurelianWire as an associated interface
-// on the frame so the browser process can Dispatch envelopes to it.
 class AurelianRenderFrameObserver
     : public content::RenderFrameObserver,
       public aurelian::mojom::AurelianWire {
@@ -35,10 +40,18 @@ class AurelianRenderFrameObserver
                 DispatchCallback callback) override;
 
   void BindAurelianWire(
-      mojo::PendingAssociatedReceiver<aurelian::mojom::AurelianWire>
-          receiver);
+      mojo::PendingAssociatedReceiver<aurelian::mojom::AurelianWire> receiver);
+
+  // Dispatch a verb+param to the DOM/JS handlers. Returns reply string.
+  std::string DispatchVerb(const std::string& verb, const std::string& param);
+
+  // Ensure a node is accessible from JS via __aurelian_nodes[id].
+  void EnsureNodeBridge(int node_id, const blink::WebElement& el);
 
   mojo::AssociatedReceiver<aurelian::mojom::AurelianWire> receiver_{this};
+  // Node registry — opaque, defined in .cc.
+  struct NodeRegistryImpl;
+  std::unique_ptr<NodeRegistryImpl> registry_;
 };
 
 }  // namespace aurelian

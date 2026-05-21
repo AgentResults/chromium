@@ -5,10 +5,13 @@
 #include "aurelian/handles/browser/tab_handle.h"
 
 #include <map>
+#include <sstream>
 #include <string>
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/navigation_controller.h"
@@ -462,6 +465,76 @@ void RunC2SelfTest() {
                        delete owned_wire;
                      },
                      wire));
+}
+
+// ---------------------------------------------------------------------------
+// C3 self-test — DOM + JS over Mojo
+// ---------------------------------------------------------------------------
+void RunC3SelfTest() {
+  if (Registry().empty()) {
+    LOG(WARNING) << "[aurelian-c3] FAIL: no tabs in registry";
+    return;
+  }
+
+  auto& [id, entry] = *Registry().begin();
+  if (!entry.wc) {
+    LOG(WARNING) << "[aurelian-c3] FAIL: WebContents is null";
+    return;
+  }
+
+  // Navigate to a known page.
+  std::string data_url =
+      "data:text/html,<html><head><title>C3Test</title></head>"
+      "<body><div id='target'>hello aurelian</div></body></html>";
+  GURL test_url(data_url);
+  content::NavigationController::LoadURLParams params(test_url);
+  params.transition_type = ui::PAGE_TRANSITION_TYPED;
+  entry.wc->GetController().LoadURLWithParams(params);
+
+  // Wait for load, then run the "c3.selftest" verb on the renderer.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce([](content::WebContents* wc) {
+        content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
+        if (!rfh) {
+          LOG(WARNING) << "[aurelian-c3] FAIL: no primary main frame";
+          return;
+        }
+
+        auto* wire =
+            new mojo::AssociatedRemote<aurelian::mojom::AurelianWire>();
+        rfh->GetRemoteAssociatedInterfaces()->GetInterface(wire);
+        if (!wire->is_bound()) {
+          LOG(WARNING) << "[aurelian-c3] FAIL: AurelianWire not bound";
+          delete wire;
+          return;
+        }
+
+        // Send "c3.selftest" — the renderer runs all DOM/JS checks
+        // and returns results as lines of "PASS:name" or "FAIL:name".
+        std::string verb = "c3.selftest";
+        std::vector<uint8_t> envelope(verb.begin(), verb.end());
+        (*wire)->Dispatch(
+            envelope,
+            base::BindOnce(
+                [](mojo::AssociatedRemote<aurelian::mojom::AurelianWire>*
+                       owned_wire,
+                   const std::vector<uint8_t>& reply) {
+                  std::string results(reply.begin(), reply.end());
+                  // Log each line with [aurelian-c3] prefix.
+                  std::istringstream iss(results);
+                  std::string line;
+                  while (std::getline(iss, line)) {
+                    if (!line.empty()) {
+                      LOG(WARNING) << "[aurelian-c3] " << line;
+                    }
+                  }
+                  LOG(WARNING) << "[aurelian-c3] self-test complete";
+                  delete owned_wire;
+                },
+                wire));
+      }, entry.wc),
+      base::Seconds(2));
 }
 
 }  // namespace aurelian

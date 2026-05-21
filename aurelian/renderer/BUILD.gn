@@ -13,6 +13,7 @@ source_set("renderer") {
     "//base",
     "//content/public/renderer",
     "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink",
     "//third_party/blink/public/common",
     "//v8",
   ]

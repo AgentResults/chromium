@@ -36,8 +36,11 @@ std::unique_ptr<TabsHandleImpl> CreateTabsHandle();
 int RunC1SelfTest();
 
 // C2 self-test — dispatches to renderer via Mojo, logs results.
-// Async: posts results as [aurelian-c2] log lines.
 void RunC2SelfTest();
+
+// C3 self-test — DOM + JS over Mojo. Navigates to a test page,
+// queries DOM, reads node properties, evals JS.
+void RunC3SelfTest();
 
 }  // namespace aurelian
 

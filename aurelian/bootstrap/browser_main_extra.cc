@@ -210,6 +210,8 @@ void BrowserMainExtra::PostBrowserStart() {
         }
         // C2: test cross-process Mojo dispatch to renderer.
         RunC2SelfTest();
+        // C3: test DOM + JS over Mojo (navigates to test page first).
+        RunC3SelfTest();
       }),
       base::Seconds(3));
 }
