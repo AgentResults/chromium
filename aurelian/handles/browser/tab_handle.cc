@@ -7,12 +7,18 @@
 #include <map>
 #include <string>
 
+#include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "base/logging.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "velite/agentspaces-wire/actorspace.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -116,6 +122,109 @@ class AurelianNavigationHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// FrameHandle — dispatches verbs to renderer via Mojo AurelianWire
+// ---------------------------------------------------------------------------
+class AurelianFrameHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianFrameHandle> make(
+      content::RenderFrameHost* rfh,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianFrameHandle>(
+        new AurelianFrameHandle(rfh, tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& spec) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (!rfh_) return VH::make_broken("gone");
+
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+
+    // All other verbs dispatch to the renderer over Mojo.
+    std::string reply_str = MojoDispatch(std::string(msg), spec);
+    if (reply_str.empty() || reply_str == "<not-bound>" ||
+        reply_str == "<disconnected>") {
+      return VH::make_broken("renderer-unreachable");
+    }
+    // Return the raw reply as a string value. The caller interprets.
+    return VH::make(V(reply_str));
+  }
+
+  void tell(std::string_view msg, const V& data) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (!rfh_) return;
+    MojoDispatch(std::string(msg), data);
+  }
+
+ private:
+  AurelianFrameHandle(content::RenderFrameHost* rfh, int64_t tab_id)
+      : rfh_(rfh),
+        uri_("legion://chrome/browser/tabs/" +
+             base::NumberToString(tab_id) + "/frames/" +
+             base::NumberToString(rfh->GetRoutingID())),
+        value_(uri_) {}
+
+  // Synchronous Mojo dispatch: sends verb\tparam, waits for reply.
+  // Uses base::RunLoop (safe on UI thread for Mojo IPC).
+  std::string MojoDispatch(const std::string& verb, const V& spec) {
+    if (!rfh_) return "<disconnected>";
+
+    mojo::AssociatedRemote<aurelian::mojom::AurelianWire> wire;
+    rfh_->GetRemoteAssociatedInterfaces()->GetInterface(&wire);
+    if (!wire.is_bound()) return "<not-bound>";
+
+    // Build envelope: "verb" or "verb\tparam"
+    std::string msg = verb;
+    if (spec.is_string()) {
+      msg += "\t" + spec.as_string();
+    } else if (spec.is_object()) {
+      // For object specs, pass the first string value as param.
+      for (auto& [k, v] : spec.as_object()) {
+        if (v.is_string()) {
+          msg += "\t" + v.as_string();
+          break;
+        }
+      }
+    }
+
+    std::vector<uint8_t> envelope(msg.begin(), msg.end());
+    std::string reply_str;
+    bool disconnected = false;
+
+    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    wire.set_disconnect_handler(base::BindOnce(
+        [](base::RunLoop* loop, bool* disc) {
+          *disc = true;
+          loop->Quit();
+        },
+        &run_loop, &disconnected));
+    wire->Dispatch(
+        envelope,
+        base::BindOnce(
+            [](base::RunLoop* loop, std::string* out,
+               const std::vector<uint8_t>& reply) {
+              *out = std::string(reply.begin(), reply.end());
+              loop->Quit();
+            },
+            &run_loop, &reply_str));
+    run_loop.Run();
+
+    if (disconnected) return "<disconnected>";
+    return reply_str;
+  }
+
+  content::RenderFrameHost* rfh_;
+  std::string uri_;
+  V value_;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -133,7 +242,7 @@ class AurelianTabHandle : public Handle {
   std::string sturdy_identity() const override { return uri_; }
 
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
-                                   const V& /*spec*/) override {
+                                   const V& spec) override {
     if (!wc_) return VH::make_broken("gone");
 
     if (msg == "__getIdentity") return VH::make(V(uri_));
@@ -151,6 +260,34 @@ class AurelianTabHandle : public Handle {
           {"url", V(wc_->GetVisibleURL().spec())},
           {"title", V(base::UTF16ToUTF8(wc_->GetTitle()))},
       }));
+    }
+    // frames: list frame routing IDs for this tab.
+    if (msg == "frames") {
+      std::vector<V> frame_ids;
+      wc_->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+          [&](content::RenderFrameHost* rfh) {
+            frame_ids.push_back(
+                V(static_cast<int64_t>(rfh->GetRoutingID())));
+          });
+      return VH::make(V::make_array(std::move(frame_ids)));
+    }
+    // frame: return an AurelianFrameHandle for a specific frame.
+    if (msg == "frame") {
+      content::RenderFrameHost* target = nullptr;
+      if (spec.is_object()) {
+        const V* id_val = spec.object_get("id");
+        if (id_val && id_val->is_int()) {
+          int want = static_cast<int>(id_val->as_int());
+          wc_->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+              [&](content::RenderFrameHost* rfh) {
+                if (rfh->GetRoutingID() == want) target = rfh;
+              });
+        }
+      }
+      // Default: primary main frame.
+      if (!target) target = wc_->GetPrimaryMainFrame();
+      if (!target) return VH::make_broken("no-frame");
+      return AurelianFrameHandle::make(target, tab_id_);
     }
     return VH::make_broken("not-callable");
   }

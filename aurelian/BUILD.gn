@@ -51,8 +51,11 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      "//aurelian/public/mojom",
       "//base",
       "//content/public/browser",
+      "//mojo/public/cpp/bindings",
+      "//third_party/blink/public/common",
       "//ui/base",
       "//url",
       "//velite",
@@ -96,6 +99,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
     ]
@@ -117,7 +121,10 @@ if (enable_aurelian) {
       "//testing/gtest",
       "//third_party/blink/public/common",
       "//url",
+      "//velite",
     ]
+
+    include_dirs = _velite_include_dirs
 
     configs -= [
       "//build/config/clang:find_bad_constructs",
