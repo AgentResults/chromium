@@ -7,6 +7,7 @@
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -128,6 +129,59 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, SelfTestAllPass) {
   auto reply = Dispatch("c3.selftest");
   EXPECT_NE(reply.find("PASS"), std::string::npos) << "reply=" << reply;
   EXPECT_EQ(reply.find("FAIL"), std::string::npos) << "reply=" << reply;
+}
+
+// --- C3.8: NodeRegistry lifetime tests ---
+
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest,
+                        NodeRegistryPrunedOnNavigation) {
+  NavigateToTestPage();
+  // Query a node on page A, get its id.
+  auto ids = Dispatch("dom.query", "div");
+  ASSERT_EQ(ids[0], '[');
+  std::string first_id = ids.substr(1, ids.find_first_of(",]") - 1);
+
+  // Navigate to a different page (page B).
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<html><body><p>page B</p></body></html>")));
+
+  // Old node-id should be "gone" — registry was pruned on navigation.
+  auto text = Dispatch("dom.node.text", first_id);
+  EXPECT_NE(text.find("gone"), std::string::npos)
+      << "expected gone after navigation, got: " << text;
+}
+
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, DetachedNodeReturnsGone) {
+  NavigateToTestPage();
+  auto ids = Dispatch("dom.query", "#target");
+  ASSERT_NE(ids, "[]");
+  std::string first_id = ids.substr(1, ids.find_first_of(",]") - 1);
+
+  // Remove the node from the document via JS.
+  Dispatch("js.eval", "document.getElementById('target').remove()");
+
+  // Now querying the detached node should return "gone".
+  auto text = Dispatch("dom.node.text", first_id);
+  EXPECT_NE(text.find("gone"), std::string::npos)
+      << "expected gone for detached node, got: " << text;
+}
+
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest,
+                        RepeatedQueryDoesNotGrowUnbounded) {
+  NavigateToTestPage();
+  // Query the same selector 100 times.
+  for (int i = 0; i < 100; i++) {
+    Dispatch("dom.query", "div");
+  }
+
+  // Registry size should be bounded (1 div on the page = 1 entry).
+  auto size_str = Dispatch("registry.size");
+  int size = 0;
+  ASSERT_TRUE(base::StringToInt(size_str, &size))
+      << "registry.size=" << size_str;
+  EXPECT_LE(size, 5) << "registry grew to " << size
+                      << " after 100 repeated queries";
 }
 
 }  // namespace aurelian

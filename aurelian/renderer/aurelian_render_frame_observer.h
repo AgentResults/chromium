@@ -12,6 +12,7 @@
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
+#include "ui/base/page_transition_types.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 
 namespace blink {
@@ -34,6 +35,7 @@ class AurelianRenderFrameObserver
  private:
   // content::RenderFrameObserver:
   void OnDestruct() override;
+  void DidCommitProvisionalLoad(ui::PageTransition transition) override;
 
   // aurelian::mojom::AurelianWire:
   void Dispatch(const std::vector<uint8_t>& envelope,

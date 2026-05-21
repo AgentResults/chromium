@@ -6,6 +6,7 @@
 
 #include <map>
 #include <sstream>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -26,26 +27,63 @@
 namespace aurelian {
 
 // Node registry — maps integer IDs to WebElements.
+// Fixed in C3.8: prune-on-navigation, IsConnected check, O(1) IdFor via
+// reverse index keyed on blink DomNodeId.
 struct AurelianRenderFrameObserver::NodeRegistryImpl {
   int IdFor(const blink::WebElement& element) {
-    for (auto& [id, el] : nodes) {
-      if (el == element) return id;
+    int dom_id = element.GetDomNodeId();
+    auto rit = reverse.find(dom_id);
+    if (rit != reverse.end()) {
+      // Verify the entry is still valid.
+      auto it = nodes.find(rit->second);
+      if (it != nodes.end() && it->second == element) {
+        return rit->second;
+      }
+      // Stale reverse entry — clean up.
+      reverse.erase(rit);
     }
     int id = next_id++;
     nodes[id] = element;
+    reverse[dom_id] = id;
     return id;
   }
 
+  // Returns the element if still in the registry AND connected to the
+  // document. Returns null WebElement if gone or detached.
   blink::WebElement NodeFor(int id) {
     auto it = nodes.find(id);
     if (it == nodes.end()) return blink::WebElement();
+    if (it->second.IsNull() || !it->second.IsConnected()) {
+      // Detached or collected — prune and report gone.
+      int dom_id = it->second.IsNull() ? 0 : it->second.GetDomNodeId();
+      reverse.erase(dom_id);
+      nodes.erase(it);
+      return blink::WebElement();
+    }
     return it->second;
   }
 
-  void Remove(int id) { nodes.erase(id); }
+  void Remove(int id) {
+    auto it = nodes.find(id);
+    if (it != nodes.end()) {
+      if (!it->second.IsNull()) {
+        reverse.erase(it->second.GetDomNodeId());
+      }
+      nodes.erase(it);
+    }
+  }
+
+  void Clear() {
+    nodes.clear();
+    reverse.clear();
+    next_id = 1;
+  }
+
+  size_t Size() const { return nodes.size(); }
 
   int next_id = 1;
   std::map<int, blink::WebElement> nodes;
+  std::unordered_map<int, int> reverse;  // DomNodeId -> registry id
 };
 
 namespace {
@@ -76,6 +114,12 @@ AurelianRenderFrameObserver::~AurelianRenderFrameObserver() = default;
 
 void AurelianRenderFrameObserver::OnDestruct() {
   delete this;
+}
+
+void AurelianRenderFrameObserver::DidCommitProvisionalLoad(
+    ui::PageTransition /*transition*/) {
+  // New document — clear the node registry. Old node-ids become "gone".
+  registry_->Clear();
 }
 
 void AurelianRenderFrameObserver::BindAurelianWire(
@@ -334,6 +378,11 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
     }
 
     return out.str();
+  }
+
+  // --- Registry introspection (for tests) ---
+  if (verb == "registry.size") {
+    return std::to_string(registry_->Size());
   }
 
   return "{\"error\":\"not-callable\",\"verb\":" + JsonStr(verb) + "}";
