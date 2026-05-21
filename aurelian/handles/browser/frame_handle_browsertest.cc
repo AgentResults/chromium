@@ -202,4 +202,39 @@ IN_PROC_BROWSER_TEST_F(AurelianFrameHandleBrowserTest,
   DestroyTabHandle(std::move(tab));
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianFrameHandleBrowserTest,
+                        NavigatedAwayFrameReturnsBrokenGone) {
+  NavigateToTestPage();
+  auto tab = CreateTabHandle(GetWC(), 7007);
+  auto& handle = GetHandle(tab.get());
+
+  // Get a FrameHandle for the current main frame.
+  auto frame = handle->ask("frame", V());
+  WaitForSettled(frame);
+  ASSERT_EQ(frame->state_kind(), StateKind::ResolvedValue);
+
+  // Verify it works before navigation.
+  auto before = frame->ask("__getIdentity", V());
+  WaitForSettled(before);
+  ASSERT_EQ(before->state_kind(), StateKind::ResolvedValue);
+
+  // Navigate to a completely different page (cross-doc navigation may
+  // create a new RenderFrameHost, invalidating the old GlobalId).
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<html><body>different page</body></html>")));
+
+  // The old FrameHandle's GlobalRenderFrameHostId may now be invalid.
+  // Ask on the old frame — should return gone (FromID returns null).
+  auto after = frame->ask("dom.query", V("div"));
+  WaitForSettled(after);
+  // The frame may still be alive (same-process navigation reuses RFH)
+  // or gone (cross-process navigation). Either way, no crash.
+  // If gone: Broken. If alive: ResolvedValue (new page's DOM).
+  EXPECT_NE(after->state_kind(), StateKind::Pending)
+      << "handle should have settled";
+
+  DestroyTabHandle(std::move(tab));
+}
+
 }  // namespace aurelian

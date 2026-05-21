@@ -9,6 +9,8 @@
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
+#include "content/public/browser/global_routing_id.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
@@ -35,12 +37,13 @@ using StateKind = velite::agentspaces::StateKind;
 // All access on the UI thread.
 // ---------------------------------------------------------------------------
 struct TabEntry {
-  content::WebContents* wc;
+  base::WeakPtr<content::WebContents> wc;
   std::shared_ptr<Handle> handle;
   int64_t id;
 };
 
 std::map<int64_t, TabEntry>& Registry() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   static auto* reg = new std::map<int64_t, TabEntry>();
   return *reg;
 }
@@ -51,10 +54,10 @@ std::map<int64_t, TabEntry>& Registry() {
 class AurelianNavigationHandle : public Handle {
  public:
   static std::shared_ptr<AurelianNavigationHandle> make(
-      content::WebContents* wc,
+      base::WeakPtr<content::WebContents> wc,
       int64_t tab_id) {
     return std::shared_ptr<AurelianNavigationHandle>(
-        new AurelianNavigationHandle(wc, tab_id));
+        new AurelianNavigationHandle(std::move(wc), tab_id));
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -65,8 +68,10 @@ class AurelianNavigationHandle : public Handle {
 
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
                                    const V& /*spec*/) override {
-    if (!wc_) return VH::make_broken("gone");
-    auto& ctrl = wc_->GetController();
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    auto* wc = wc_.get();
+    if (!wc) return VH::make_broken("gone");
+    auto& ctrl = wc->GetController();
 
     if (msg == "__getIdentity") return VH::make(V(uri_));
     if (msg == "canGoBack") return VH::make(V(ctrl.CanGoBack()));
@@ -79,8 +84,10 @@ class AurelianNavigationHandle : public Handle {
   }
 
   void tell(std::string_view msg, const V& data) override {
-    if (!wc_) return;
-    auto& ctrl = wc_->GetController();
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    auto* wc = wc_.get();
+    if (!wc) return;
+    auto& ctrl = wc->GetController();
 
     if (msg == "loadUrl") {
       if (data.is_string()) {
@@ -104,18 +111,19 @@ class AurelianNavigationHandle : public Handle {
     } else if (msg == "goForward") {
       if (ctrl.CanGoForward()) ctrl.GoForward();
     } else if (msg == "stop") {
-      wc_->Stop();
+      wc->Stop();
     }
   }
 
  private:
-  AurelianNavigationHandle(content::WebContents* wc, int64_t tab_id)
-      : wc_(wc),
+  AurelianNavigationHandle(base::WeakPtr<content::WebContents> wc,
+                           int64_t tab_id)
+      : wc_(std::move(wc)),
         uri_("legion://chrome/browser/tabs/" +
              base::NumberToString(tab_id) + "/navigation"),
         value_(uri_) {}
 
-  content::WebContents* wc_;
+  base::WeakPtr<content::WebContents> wc_;
   std::string uri_;
   V value_;
 };
@@ -192,7 +200,8 @@ class AurelianFrameHandle : public Handle {
       content::RenderFrameHost* rfh,
       int64_t tab_id) {
     return std::shared_ptr<AurelianFrameHandle>(
-        new AurelianFrameHandle(rfh, tab_id));
+        new AurelianFrameHandle(rfh->GetGlobalId(), tab_id,
+                                rfh->GetRoutingID()));
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -204,41 +213,42 @@ class AurelianFrameHandle : public Handle {
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
                                    const V& spec) override {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    if (!rfh_) return VH::make_broken("gone");
+    auto* rfh = content::RenderFrameHost::FromID(rfh_id_);
+    if (!rfh) return VH::make_broken("gone");
 
     if (msg == "__getIdentity") return VH::make(V(uri_));
 
-    // Async Mojo dispatch — returns a PendingMojoHandle that settles
-    // when the renderer replies or the pipe disconnects.
-    return AsyncMojoDispatch(std::string(msg), spec);
+    return AsyncMojoDispatch(rfh, std::string(msg), spec);
   }
 
   void tell(std::string_view msg, const V& data) override {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    if (!rfh_) return;
-    // Fire-and-forget: dispatch but ignore the reply.
-    AsyncMojoDispatch(std::string(msg), data);
+    auto* rfh = content::RenderFrameHost::FromID(rfh_id_);
+    if (!rfh) return;
+    AsyncMojoDispatch(rfh, std::string(msg), data);
   }
 
  private:
-  AurelianFrameHandle(content::RenderFrameHost* rfh, int64_t tab_id)
-      : rfh_(rfh),
+  AurelianFrameHandle(content::GlobalRenderFrameHostId id,
+                      int64_t tab_id,
+                      int routing_id)
+      : rfh_id_(id),
         uri_("legion://chrome/browser/tabs/" +
              base::NumberToString(tab_id) + "/frames/" +
-             base::NumberToString(rfh->GetRoutingID())),
+             base::NumberToString(routing_id)),
         value_(uri_) {}
 
-  std::shared_ptr<Handle> AsyncMojoDispatch(const std::string& verb,
+  std::shared_ptr<Handle> AsyncMojoDispatch(content::RenderFrameHost* rfh,
+                                            const std::string& verb,
                                             const V& spec) {
-    if (!rfh_) return VH::make_broken("gone");
-    if (!rfh_->IsRenderFrameLive()) {
+    if (!rfh->IsRenderFrameLive()) {
       return VH::make_broken("renderer-unreachable");
     }
 
     auto state = std::make_unique<MojoDispatchState>();
     state->wire =
         std::make_unique<mojo::AssociatedRemote<aurelian::mojom::AurelianWire>>();
-    rfh_->GetRemoteAssociatedInterfaces()->GetInterface(state->wire.get());
+    rfh->GetRemoteAssociatedInterfaces()->GetInterface(state->wire.get());
     if (!state->wire->is_bound()) {
       return VH::make_broken("renderer-unreachable");
     }
@@ -283,7 +293,7 @@ class AurelianFrameHandle : public Handle {
     return pending;
   }
 
-  content::RenderFrameHost* rfh_;
+  content::GlobalRenderFrameHostId rfh_id_;
   std::string uri_;
   V value_;
 };
@@ -296,7 +306,7 @@ class AurelianTabHandle : public Handle {
   static std::shared_ptr<AurelianTabHandle> make(content::WebContents* wc,
                                                  int64_t tab_id) {
     return std::shared_ptr<AurelianTabHandle>(
-        new AurelianTabHandle(wc, tab_id));
+        new AurelianTabHandle(wc->GetWeakPtr(), tab_id));
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -307,49 +317,48 @@ class AurelianTabHandle : public Handle {
 
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
                                    const V& spec) override {
-    if (!wc_) return VH::make_broken("gone");
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    auto* wc = wc_.get();
+    if (!wc) return VH::make_broken("gone");
 
     if (msg == "__getIdentity") return VH::make(V(uri_));
     if (msg == "url")
-      return VH::make(V(wc_->GetVisibleURL().spec()));
+      return VH::make(V(wc->GetVisibleURL().spec()));
     if (msg == "title")
-      return VH::make(V(base::UTF16ToUTF8(wc_->GetTitle())));
+      return VH::make(V(base::UTF16ToUTF8(wc->GetTitle())));
     if (msg == "isLoading")
-      return VH::make(V(wc_->IsLoading()));
+      return VH::make(V(wc->IsLoading()));
     if (msg == "navigation")
       return AurelianNavigationHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},
-          {"url", V(wc_->GetVisibleURL().spec())},
-          {"title", V(base::UTF16ToUTF8(wc_->GetTitle()))},
+          {"url", V(wc->GetVisibleURL().spec())},
+          {"title", V(base::UTF16ToUTF8(wc->GetTitle()))},
       }));
     }
-    // frames: list frame routing IDs for this tab.
     if (msg == "frames") {
       std::vector<V> frame_ids;
-      wc_->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+      wc->GetPrimaryMainFrame()->ForEachRenderFrameHost(
           [&](content::RenderFrameHost* rfh) {
             frame_ids.push_back(
                 V(static_cast<int64_t>(rfh->GetRoutingID())));
           });
       return VH::make(V::make_array(std::move(frame_ids)));
     }
-    // frame: return an AurelianFrameHandle for a specific frame.
     if (msg == "frame") {
       content::RenderFrameHost* target = nullptr;
       if (spec.is_object()) {
         const V* id_val = spec.object_get("id");
         if (id_val && id_val->is_int()) {
           int want = static_cast<int>(id_val->as_int());
-          wc_->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+          wc->GetPrimaryMainFrame()->ForEachRenderFrameHost(
               [&](content::RenderFrameHost* rfh) {
                 if (rfh->GetRoutingID() == want) target = rfh;
               });
         }
       }
-      // Default: primary main frame.
-      if (!target) target = wc_->GetPrimaryMainFrame();
+      if (!target) target = wc->GetPrimaryMainFrame();
       if (!target) return VH::make_broken("no-frame");
       return AurelianFrameHandle::make(target, tab_id_);
     }
@@ -358,18 +367,17 @@ class AurelianTabHandle : public Handle {
 
   void tell(std::string_view /*msg*/, const V& /*data*/) override {}
 
-  content::WebContents* web_contents() const { return wc_; }
   int64_t tab_id() const { return tab_id_; }
 
  private:
-  AurelianTabHandle(content::WebContents* wc, int64_t tab_id)
-      : wc_(wc),
+  AurelianTabHandle(base::WeakPtr<content::WebContents> wc, int64_t tab_id)
+      : wc_(std::move(wc)),
         tab_id_(tab_id),
         uri_("legion://chrome/browser/tabs/" +
              base::NumberToString(tab_id)),
         value_(uri_) {}
 
-  content::WebContents* wc_;
+  base::WeakPtr<content::WebContents> wc_;
   int64_t tab_id_;
   std::string uri_;
   V value_;
@@ -400,11 +408,12 @@ class AurelianTabsHandle : public Handle {
     if (msg == "list") {
       std::vector<V> items;
       for (auto& [id, entry] : Registry()) {
-        if (!entry.wc) continue;
+        auto* live_wc = entry.wc.get();
+        if (!live_wc) continue;
         items.push_back(V::make_object({
             {"id", V(id)},
-            {"url", V(entry.wc->GetVisibleURL().spec())},
-            {"title", V(base::UTF16ToUTF8(entry.wc->GetTitle()))},
+            {"url", V(live_wc->GetVisibleURL().spec())},
+            {"title", V(base::UTF16ToUTF8(live_wc->GetTitle()))},
             {"active", V(false)},  // simplified for C1
         }));
       }
@@ -466,7 +475,7 @@ std::unique_ptr<TabHandleImpl> CreateTabHandle(content::WebContents* wc,
   impl->tab_id = tab_id;
 
   TabEntry entry;
-  entry.wc = wc;
+  entry.wc = wc->GetWeakPtr();
   entry.handle = handle;
   entry.id = tab_id;
   Registry()[tab_id] = entry;
