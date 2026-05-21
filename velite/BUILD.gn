@@ -1,0 +1,439 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Velite substrate — the shared agentspaces-wire + handle layer.
+# Option A: GN-native static_library compiling directly from the Legion
+# source tree. See design §15 for the decision rationale.
+#
+# Split into source_sets to avoid .o basename collisions (parser.cpp,
+# handle.cpp exist in multiple libraries).
+
+import("//build/config/compiler/compiler.gni")
+
+_velite_src = "../../../Legion/Velite/src"
+
+# Common include_dirs shared by all source_sets.
+_velite_include_dirs = [
+  "$_velite_src/agentspaces-wire/include",
+  "$_velite_src/agentspaces/include",
+  "$_velite_src/capability/include",
+  "$_velite_src/causal/include",
+  "$_velite_src/channel/include",
+  "$_velite_src/crypto/include",
+  "$_velite_src/dataflow/include",
+  "$_velite_src/dispatch/include",
+  "$_velite_src/envelope/include",
+  "$_velite_src/envelopes/include",
+  "$_velite_src/fact-log/include",
+  "$_velite_src/fact-substrate/include",
+  "$_velite_src/federated-kg/include",
+  "$_velite_src/forth/include",
+  "$_velite_src/forth-handle/include",
+  "$_velite_src/handle/include",
+  "$_velite_src/host/include",
+  "$_velite_src/identity/include",
+  "$_velite_src/json/include",
+  "$_velite_src/kg/include",
+  "$_velite_src/lattices/include",
+  "$_velite_src/ontology/include",
+  "$_velite_src/origin-sequence/include",
+  "$_velite_src/overlay/include",
+  "$_velite_src/resources/include",
+  "$_velite_src/search/include",
+  "$_velite_src/substrate/include",
+  "$_velite_src/datastore/include",
+  "$_velite_src/actor/include",
+  "$_velite_src/agent/include",
+  "$_velite_src/agent-replay/include",
+  "$_velite_src/cap-bits/include",
+  "$_velite_src/replay-handle/include",
+  "$_velite_src/mt/runtime/include",
+  "$_velite_src/mt/compiler/include",
+  "$_velite_src/crypto/vendor",
+  "$_velite_src/agentspaces-wire/src",
+  "$_velite_src/forth/src",
+  "$_velite_src/forth/native",
+  "$_velite_src/forth-handle/src",
+  "$_velite_src/forth-compiler",
+  "$_velite_src/mt/bridge",
+  "$_velite_src/mt/compiler",
+  "$_velite_src/mt/primitives",
+  "$_velite_src/mt/runtime",
+  "$_velite_src/mt/embedded-bytecode",
+]
+
+# Suppress Chromium-specific warnings for third-party Velite code.
+config("velite_warnings") {
+  cflags_cc = [
+    "-Wno-unused-variable",
+    "-Wno-unused-function",
+    "-Wno-sign-compare",
+    "-Wno-missing-field-initializers",
+    "-Wno-extra-semi",
+    "-Wno-shorten-64-to-32",
+    "-Wno-shadow",
+    "-Wno-implicit-fallthrough",
+    "-Wno-vla-cxx-extension",
+    "-Wno-c99-extensions",
+    "-Wno-unused-but-set-variable",
+    "-Wno-deprecated-declarations",
+    "-Wno-unused-private-field",
+  ]
+  cflags_c = [
+    "-Wno-unused-function",
+    "-Wno-sign-compare",
+    "-Wno-shorten-64-to-32",
+  ]
+}
+
+# --- Monocypher (vendored C crypto primitives) ---
+source_set("monocypher") {
+  sources = [
+    "$_velite_src/crypto/vendor/monocypher.c",
+    "$_velite_src/crypto/vendor/monocypher-ed25519.c",
+  ]
+  include_dirs = [ "$_velite_src/crypto/vendor" ]
+
+  # Treat as third-party code: disable Chromium clang plugins.
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Core: crypto + substrate + capability + envelope + envelopes + identity ---
+source_set("velite_core") {
+  sources = [
+    "$_velite_src/crypto/src/crypto.cpp",
+    "$_velite_src/substrate/src/base64.cpp",
+    "$_velite_src/substrate/src/jcs_encoder.cpp",
+    "$_velite_src/substrate/src/sha1.cpp",
+    "$_velite_src/substrate/src/sha256.cpp",
+    "$_velite_src/capability/src/capability.cpp",
+    "$_velite_src/envelope/src/envelope.cpp",
+    "$_velite_src/envelope/src/json_parser.cpp",
+    "$_velite_src/envelope/src/json_walker.cpp",
+    "$_velite_src/identity/src/ek_handshake.cpp",
+    "$_velite_src/identity/src/hk_handshake.cpp",
+    "$_velite_src/identity/src/identity.cpp",
+    "$_velite_src/identity/src/psk_handshake.cpp",
+    "$_velite_src/host/src/yaml_field.cpp",
+    "$_velite_src/resources/src/manifest.cpp",
+    "$_velite_src/origin-sequence/src/origin_sequence.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+  deps = [ ":monocypher" ]
+}
+
+# --- Envelopes (CBOR signed envelopes — separate source_set because its
+#     velite/envelope.hpp collides with envelope/'s velite/envelope.hpp) ---
+source_set("velite_envelopes") {
+  sources = [
+    "$_velite_src/envelopes/src/canonical_bytes.cpp",
+    "$_velite_src/envelopes/src/parse.cpp",
+    "$_velite_src/envelopes/src/sign_verify.cpp",
+  ]
+
+  # envelopes/include MUST come before envelope/include so the right
+  # velite/envelope.hpp is found.
+  include_dirs = [ "$_velite_src/envelopes/include" ] + _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Handle layer (has handle.cpp — collides with agentspaces-wire) ---
+source_set("velite_handle") {
+  sources = [
+    "$_velite_src/handle/src/audit.cpp",
+    "$_velite_src/handle/src/cbor_codec.cpp",
+    "$_velite_src/handle/src/handle.cpp",
+    "$_velite_src/handle/src/pending.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Channel (uses BoringSSL) ---
+source_set("velite_channel") {
+  sources = [
+    "$_velite_src/channel/src/tcp_channel.cpp",
+    "$_velite_src/channel/src/tcp_listener.cpp",
+    "$_velite_src/channel/src/tls_ws_channel.cpp",
+    "$_velite_src/channel/src/tls_ws_listener.cpp",
+    "$_velite_src/channel/src/uart_channel.cpp",
+    "$_velite_src/channel/src/uds_channel.cpp",
+    "$_velite_src/channel/src/uds_listener.cpp",
+    "$_velite_src/channel/src/ws_channel.cpp",
+    "$_velite_src/channel/src/ws_frame.cpp",
+    "$_velite_src/channel/src/ws_listener.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+  deps = [ "//third_party/boringssl" ]
+}
+
+# --- Dataflow ---
+source_set("velite_dataflow") {
+  sources = [
+    "$_velite_src/dataflow/src/arena.cpp",
+    "$_velite_src/dataflow/src/bridge.cpp",
+    "$_velite_src/dataflow/src/canonical_encode.cpp",
+    "$_velite_src/dataflow/src/catalogue.cpp",
+    "$_velite_src/dataflow/src/compile.cpp",
+    "$_velite_src/dataflow/src/datalog.cpp",
+    "$_velite_src/dataflow/src/distinct.cpp",
+    "$_velite_src/dataflow/src/expr.cpp",
+    "$_velite_src/dataflow/src/iterate.cpp",
+    "$_velite_src/dataflow/src/join.cpp",
+    "$_velite_src/dataflow/src/lftj.cpp",
+    "$_velite_src/dataflow/src/linear.cpp",
+    "$_velite_src/dataflow/src/reduce.cpp",
+    "$_velite_src/dataflow/src/subscribe.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Forth VM + native ---
+source_set("velite_forth") {
+  sources = [
+    "$_velite_src/forth/src/alloc_guard.cpp",
+    "$_velite_src/forth/src/cap_registry.cpp",
+    "$_velite_src/forth/src/dictionary.cpp",
+    "$_velite_src/forth/src/executor.cpp",
+    "$_velite_src/forth/src/installer.cpp",
+    "$_velite_src/forth/src/primitive.cpp",
+    "$_velite_src/forth/src/string_prims.cpp",
+    "$_velite_src/forth/src/validator.cpp",
+    "$_velite_src/forth/src/vm.cpp",
+    "$_velite_src/forth/native/auto_loader.cpp",
+    "$_velite_src/forth/native/code_emit.cpp",
+    "$_velite_src/forth/native/code_pool.cpp",
+    "$_velite_src/forth/native/code_word_compile.cpp",
+    "$_velite_src/forth/native/grammar_validator.cpp",
+    "$_velite_src/forth/native/microbench.cpp",
+    "$_velite_src/forth/native/prim_shims.cpp",
+    "$_velite_src/forth/native/ref_words.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Forth-handle ---
+source_set("velite_forth_handle") {
+  sources = [
+    "$_velite_src/forth-handle/src/forth_canonical_resolver.cpp",
+    "$_velite_src/forth-handle/src/forth_handle.cpp",
+    "$_velite_src/forth-handle/src/forth_handle_adapter.cpp",
+    "$_velite_src/forth-handle/src/forth_install_wire.cpp",
+    "$_velite_src/forth-handle/src/handle_prim_register.cpp",
+    "$_velite_src/forth-handle/src/handle_prims.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Forth-compiler (has parser.cpp — collides with mt/compiler) ---
+source_set("velite_forth_compiler") {
+  sources = [
+    "$_velite_src/forth-compiler/compiler.cpp",
+    "$_velite_src/forth-compiler/disassembler.cpp",
+    "$_velite_src/forth-compiler/embed.cpp",
+    "$_velite_src/forth-compiler/lexer.cpp",
+    "$_velite_src/forth-compiler/manifest_loader.cpp",
+    "$_velite_src/forth-compiler/parser.cpp",
+    "$_velite_src/forth-compiler/symbol_table.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- MT runtime + compiler + bridge + primitives ---
+source_set("velite_mt") {
+  sources = [
+    "$_velite_src/mt/bridge/vm_bridge.cpp",
+    "$_velite_src/mt/compiler/adapt_resolver.cpp",
+    "$_velite_src/mt/compiler/emit.cpp",
+    "$_velite_src/mt/compiler/handler_step_emitter.cpp",
+    "$_velite_src/mt/compiler/parser.cpp",
+    "$_velite_src/mt/compiler/reducer_step_emitter.cpp",
+    "$_velite_src/mt/compiler/template_emitter.cpp",
+    "$_velite_src/mt/compiler/yaml_to_json.cpp",
+    "$_velite_src/mt/embedded-bytecode/embedded_blobs.cpp",
+    # runtime_bake_check.cpp excluded: needs mt_bootstrap_hashes.inc
+    # (generated by CMake build, not yet wired to GN).
+    # "$_velite_src/mt/embedded-bytecode/runtime_bake_check.cpp",
+    "$_velite_src/mt/primitives/frame_stack.cpp",
+    "$_velite_src/mt/primitives/heap.cpp",
+    "$_velite_src/mt/primitives/tagged_ops.cpp",
+    "$_velite_src/mt/primitives/trackers.cpp",
+    "$_velite_src/mt/runtime/runtime.cpp",
+    "$_velite_src/mt/runtime/tagged_cell.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Agentspaces-wire (has handle.cpp — collides with handle/) ---
+source_set("velite_wire") {
+  sources = [
+    "$_velite_src/agentspaces-wire/src/actorspace.cpp",
+    "$_velite_src/agentspaces-wire/src/capability_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/component_instance_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/component_registry_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
+    "$_velite_src/agentspaces-wire/src/datastore_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/dispatcher.cpp",
+    "$_velite_src/agentspaces-wire/src/fact_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/federated_kg_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/frames.cpp",
+    "$_velite_src/agentspaces-wire/src/handle.cpp",
+    "$_velite_src/agentspaces-wire/src/handle_contract.cpp",
+    "$_velite_src/agentspaces-wire/src/handoff.cpp",
+    "$_velite_src/agentspaces-wire/src/host_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/ivm_crdt_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/ivm_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/kg_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/lifecycle_fsm.cpp",
+    "$_velite_src/agentspaces-wire/src/lifecycle_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/marshal.cpp",
+    "$_velite_src/agentspaces-wire/src/ocapn_bridge.cpp",
+    "$_velite_src/agentspaces-wire/src/ocapn_session.cpp",
+    "$_velite_src/agentspaces-wire/src/ocapn_syrup.cpp",
+    "$_velite_src/agentspaces-wire/src/ontology_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/resources_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/search_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/type_registry.cpp",
+    "$_velite_src/agentspaces-wire/src/version.cpp",
+    "$_velite_src/agentspaces-wire/src/wire_marshal.cpp",
+  ]
+  # envelopes/include first: ivm_crdt_handle.cpp needs the CBOR Envelope.
+  include_dirs = [ "$_velite_src/envelopes/include" ] + _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Aggregate target ---
+static_library("velite") {
+  deps = [
+    ":monocypher",
+    ":velite_channel",
+    ":velite_core",
+    ":velite_envelopes",
+    ":velite_dataflow",
+    ":velite_forth",
+    ":velite_forth_compiler",
+    ":velite_forth_handle",
+    ":velite_handle",
+    ":velite_mt",
+    ":velite_wire",
+  ]
+  complete_static_lib = true
+}
