@@ -1,0 +1,68 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Aurelian — Velite's Chromium embodiment.
+# C0: browser-process bootstrap that creates the root ActorSpace.
+
+import("//build/config/compiler/compiler.gni")
+
+declare_args() {
+  # Build the Aurelian embodiment (Velite inside Chromium).
+  enable_aurelian = true
+}
+
+if (enable_aurelian) {
+  _velite_src = "../../../Legion/Velite/src"
+
+  source_set("aurelian") {
+    sources = [
+      "bootstrap/browser_main_extra.cc",
+      "bootstrap/browser_main_extra.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser:main_extra_parts",
+      "//velite",
+    ]
+
+    # Velite substrate headers.
+    include_dirs = [
+      "$_velite_src/agentspaces-wire/include",
+      "$_velite_src/agentspaces/include",
+      "$_velite_src/capability/include",
+      "$_velite_src/causal/include",
+      "$_velite_src/channel/include",
+      "$_velite_src/crypto/include",
+      "$_velite_src/dataflow/include",
+      "$_velite_src/dispatch/include",
+      "$_velite_src/envelope/include",
+      "$_velite_src/envelopes/include",
+      "$_velite_src/fact-log/include",
+      "$_velite_src/fact-substrate/include",
+      "$_velite_src/forth/include",
+      "$_velite_src/forth-handle/include",
+      "$_velite_src/handle/include",
+      "$_velite_src/host/include",
+      "$_velite_src/identity/include",
+      "$_velite_src/json/include",
+      "$_velite_src/lattices/include",
+      "$_velite_src/origin-sequence/include",
+      "$_velite_src/resources/include",
+      "$_velite_src/substrate/include",
+      "$_velite_src/crypto/vendor",
+      "$_velite_src/mt/runtime/include",
+      "$_velite_src/mt/compiler/include",
+    ]
+
+    # Aurelian is Chromium code, but Velite headers need RTTI +
+    # suppressed warnings for the substrate includes.
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+}
