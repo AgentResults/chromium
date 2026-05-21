@@ -1459,6 +1459,7 @@ static_library("browser") {
   deps = [
     ":active_use_util",
     "//aurelian",
+    "//aurelian:aurelian_network",
     ":browser_features",
     ":browser_process",
     ":expired_flags_list",

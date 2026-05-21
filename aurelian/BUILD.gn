@@ -44,6 +44,30 @@ if (enable_aurelian) {
   ]
 
   # Velite handle code — compiled with RTTI (Velite uses dynamic_cast).
+  # Network intercept + cookie handles (no RTTI — used by chrome/browser).
+  source_set("aurelian_network") {
+    sources = [
+      "handles/network/network_handle.cc",
+      "handles/network/network_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//net",
+      "//services/network/public/cpp",
+      "//services/network/public/mojom",
+      "//third_party/blink/public/common",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # Velite handle code — compiled with RTTI.
   source_set("aurelian_handles") {
     sources = [
       "handles/browser/tab_handle.cc",
@@ -101,6 +125,7 @@ if (enable_aurelian) {
     sources = [
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
+      "handles/network/network_handle_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
     ]
 
@@ -108,6 +133,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_handles",
+      ":aurelian_network",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",
@@ -118,6 +144,8 @@ if (enable_aurelian) {
       "//content/public/browser",
       "//content/test:test_support",
       "//mojo/public/cpp/bindings",
+      "//net",
+      "//net:test_support",
       "//testing/gtest",
       "//third_party/blink/public/common",
       "//url",
