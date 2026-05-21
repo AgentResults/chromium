@@ -5,6 +5,8 @@
 # Aurelian — Velite's Chromium embodiment.
 
 import("//build/config/compiler/compiler.gni")
+import("//testing/test.gni")
+import("//testing/test.gni")
 
 declare_args() {
   enable_aurelian = true
@@ -49,11 +51,8 @@ if (enable_aurelian) {
     ]
 
     deps = [
-      "//aurelian/public/mojom",
       "//base",
       "//content/public/browser",
-      "//mojo/public/cpp/bindings",
-      "//third_party/blink/public/common",
       "//ui/base",
       "//url",
       "//velite",
@@ -69,8 +68,7 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
-  # Bootstrap — compiled as normal Chromium code (no RTTI) to match
-  # Chrome's TabStripModelObserver etc.
+  # Bootstrap — compiled as normal Chromium code (no RTTI).
   source_set("aurelian") {
     sources = [
       "bootstrap/browser_main_extra.cc",
@@ -88,11 +86,44 @@ if (enable_aurelian) {
 
     include_dirs = _velite_include_dirs
 
-    # Keep no_rtti (matching Chrome), but disable clang plugins for
-    # Velite header includes.
     configs -= [
       "//build/config/clang:find_bad_constructs",
       "//build/config/clang:unsafe_buffers",
     ]
+  }
+
+  # Dedicated test binary — embedded-subsystem convention (like
+  # extensions_browsertests, headless_browsertests).
+  test("aurelian_browsertests") {
+    sources = [
+      "handles/browser/tab_handle_browsertest.cc",
+      "renderer/aurelian_wire_browsertest.cc",
+    ]
+
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+    deps = [
+      ":aurelian_handles",
+      "//aurelian/public/mojom",
+      "//base",
+      "//base/test:test_support",
+      "//chrome/browser",
+      "//chrome/browser/ui",
+      "//chrome/test:browser_tests_runner",
+      "//chrome/test:test_support",
+      "//content/public/browser",
+      "//content/test:test_support",
+      "//mojo/public/cpp/bindings",
+      "//testing/gtest",
+      "//third_party/blink/public/common",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+
+    data_deps = [ "//chrome" ]
   }
 }

@@ -10,9 +10,7 @@
 #include <vector>
 
 #include "aurelian/handles/browser/tab_handle.h"
-#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
@@ -200,20 +198,7 @@ void BrowserMainExtra::PreBrowserStart() {
 }
 
 void BrowserMainExtra::PostBrowserStart() {
-  // Schedule self-tests after a delay so the initial tab + renderer are ready.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, base::BindOnce([]() {
-        int failures = RunC1SelfTest();
-        if (failures > 0) {
-          LOG(ERROR) << "[aurelian-c1] SELF-TEST FAILED: " << failures
-                     << " assertion(s)";
-        }
-        // C2: test cross-process Mojo dispatch to renderer.
-        RunC2SelfTest();
-        // C3: test DOM + JS over Mojo (navigates to test page first).
-        RunC3SelfTest();
-      }),
-      base::Seconds(3));
+  // Self-tests ripped in C3.5 — now in *_browsertest.cc files.
 }
 
 void BrowserMainExtra::PostMainMessageLoopRun() {

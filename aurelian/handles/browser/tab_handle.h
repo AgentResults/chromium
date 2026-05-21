@@ -14,10 +14,8 @@ class WebContents;
 
 namespace aurelian {
 
-// Opaque impl — defined in tab_handle.cc. Destructor must be visible
-// where unique_ptr is destroyed, so we use custom deleters.
 struct TabHandleImpl {
-  void* handle_ptr = nullptr;  // actually shared_ptr<Handle>
+  void* handle_ptr = nullptr;
   int64_t tab_id = 0;
   ~TabHandleImpl();
 };
@@ -31,16 +29,6 @@ std::unique_ptr<TabHandleImpl> CreateTabHandle(content::WebContents* wc,
                                                int64_t tab_id);
 void DestroyTabHandle(std::unique_ptr<TabHandleImpl> impl);
 std::unique_ptr<TabsHandleImpl> CreateTabsHandle();
-
-// C1 self-test — returns number of failed assertions.
-int RunC1SelfTest();
-
-// C2 self-test — dispatches to renderer via Mojo, logs results.
-void RunC2SelfTest();
-
-// C3 self-test — DOM + JS over Mojo. Navigates to a test page,
-// queries DOM, reads node properties, evals JS.
-void RunC3SelfTest();
 
 }  // namespace aurelian
 
