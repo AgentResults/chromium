@@ -9,7 +9,6 @@
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "base/logging.h"
-#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/browser_thread.h"
@@ -122,6 +121,69 @@ class AurelianNavigationHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// PendingMojoHandle — starts Pending, settles to ResolvedValue or Broken
+// when the Mojo reply arrives (or the pipe disconnects).
+// ---------------------------------------------------------------------------
+class PendingMojoHandle : public Handle {
+ public:
+  static std::shared_ptr<PendingMojoHandle> make() {
+    return std::shared_ptr<PendingMojoHandle>(new PendingMojoHandle());
+  }
+
+  StateKind state_kind() const override { return kind_; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return broken_; }
+  std::string sturdy_identity() const override { return ""; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view, const V&) override {
+    return VH::make_broken("not-callable");
+  }
+  void tell(std::string_view, const V&) override {}
+
+  void Resolve(const std::string& reply) {
+    value_ = V(reply);
+    kind_ = StateKind::ResolvedValue;
+  }
+
+  void Break(const std::string& reason) {
+    broken_ = reason;
+    kind_ = StateKind::Broken;
+  }
+
+ private:
+  PendingMojoHandle() = default;
+  StateKind kind_ = StateKind::Pending;
+  V value_;
+  std::string broken_;
+};
+
+// ---------------------------------------------------------------------------
+// MojoDispatchState — owns the AssociatedRemote across the async gap.
+// Moved into the reply/disconnect callbacks via weak pointers on the
+// PendingMojoHandle so the handle settles when the reply arrives or
+// the pipe drops.
+// ---------------------------------------------------------------------------
+struct MojoDispatchState {
+  std::unique_ptr<mojo::AssociatedRemote<aurelian::mojom::AurelianWire>> wire;
+  std::weak_ptr<PendingMojoHandle> pending;
+
+  static void OnReply(std::unique_ptr<MojoDispatchState> state,
+                      const std::vector<uint8_t>& reply) {
+    if (auto h = state->pending.lock()) {
+      h->Resolve(std::string(reply.begin(), reply.end()));
+    }
+    // state (and the AssociatedRemote it owns) destroyed here.
+  }
+
+  static void OnDisconnect(std::unique_ptr<MojoDispatchState> state) {
+    if (auto h = state->pending.lock()) {
+      h->Break("renderer-unreachable");
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
 // FrameHandle — dispatches verbs to renderer via Mojo AurelianWire
 // ---------------------------------------------------------------------------
 class AurelianFrameHandle : public Handle {
@@ -146,20 +208,16 @@ class AurelianFrameHandle : public Handle {
 
     if (msg == "__getIdentity") return VH::make(V(uri_));
 
-    // All other verbs dispatch to the renderer over Mojo.
-    std::string reply_str = MojoDispatch(std::string(msg), spec);
-    if (reply_str.empty() || reply_str == "<not-bound>" ||
-        reply_str == "<disconnected>") {
-      return VH::make_broken("renderer-unreachable");
-    }
-    // Return the raw reply as a string value. The caller interprets.
-    return VH::make(V(reply_str));
+    // Async Mojo dispatch — returns a PendingMojoHandle that settles
+    // when the renderer replies or the pipe disconnects.
+    return AsyncMojoDispatch(std::string(msg), spec);
   }
 
   void tell(std::string_view msg, const V& data) override {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     if (!rfh_) return;
-    MojoDispatch(std::string(msg), data);
+    // Fire-and-forget: dispatch but ignore the reply.
+    AsyncMojoDispatch(std::string(msg), data);
   }
 
  private:
@@ -170,21 +228,26 @@ class AurelianFrameHandle : public Handle {
              base::NumberToString(rfh->GetRoutingID())),
         value_(uri_) {}
 
-  // Synchronous Mojo dispatch: sends verb\tparam, waits for reply.
-  // Uses base::RunLoop (safe on UI thread for Mojo IPC).
-  std::string MojoDispatch(const std::string& verb, const V& spec) {
-    if (!rfh_) return "<disconnected>";
+  std::shared_ptr<Handle> AsyncMojoDispatch(const std::string& verb,
+                                            const V& spec) {
+    if (!rfh_) return VH::make_broken("gone");
+    if (!rfh_->IsRenderFrameLive()) {
+      return VH::make_broken("renderer-unreachable");
+    }
 
-    mojo::AssociatedRemote<aurelian::mojom::AurelianWire> wire;
-    rfh_->GetRemoteAssociatedInterfaces()->GetInterface(&wire);
-    if (!wire.is_bound()) return "<not-bound>";
+    auto state = std::make_unique<MojoDispatchState>();
+    state->wire =
+        std::make_unique<mojo::AssociatedRemote<aurelian::mojom::AurelianWire>>();
+    rfh_->GetRemoteAssociatedInterfaces()->GetInterface(state->wire.get());
+    if (!state->wire->is_bound()) {
+      return VH::make_broken("renderer-unreachable");
+    }
 
     // Build envelope: "verb" or "verb\tparam"
     std::string msg = verb;
     if (spec.is_string()) {
       msg += "\t" + spec.as_string();
     } else if (spec.is_object()) {
-      // For object specs, pass the first string value as param.
       for (auto& [k, v] : spec.as_object()) {
         if (v.is_string()) {
           msg += "\t" + v.as_string();
@@ -193,30 +256,31 @@ class AurelianFrameHandle : public Handle {
       }
     }
 
-    std::vector<uint8_t> envelope(msg.begin(), msg.end());
-    std::string reply_str;
-    bool disconnected = false;
+    auto pending = PendingMojoHandle::make();
+    state->pending = pending;
 
-    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-    wire.set_disconnect_handler(base::BindOnce(
-        [](base::RunLoop* loop, bool* disc) {
-          *disc = true;
-          loop->Quit();
+    // Set disconnect handler BEFORE dispatching.
+    // We need a raw pointer to state for the disconnect handler since
+    // BindOnce for Dispatch takes ownership. Use a weak reference.
+    auto* wire_ptr = state->wire.get();
+
+    // Move state into the Dispatch callback. The disconnect handler
+    // uses a weak ref to the pending handle directly.
+    std::weak_ptr<PendingMojoHandle> weak_pending = pending;
+    wire_ptr->set_disconnect_handler(base::BindOnce(
+        [](std::weak_ptr<PendingMojoHandle> wp) {
+          if (auto h = wp.lock()) {
+            h->Break("renderer-unreachable");
+          }
         },
-        &run_loop, &disconnected));
-    wire->Dispatch(
-        envelope,
-        base::BindOnce(
-            [](base::RunLoop* loop, std::string* out,
-               const std::vector<uint8_t>& reply) {
-              *out = std::string(reply.begin(), reply.end());
-              loop->Quit();
-            },
-            &run_loop, &reply_str));
-    run_loop.Run();
+        weak_pending));
 
-    if (disconnected) return "<disconnected>";
-    return reply_str;
+    std::vector<uint8_t> envelope(msg.begin(), msg.end());
+    (*wire_ptr)->Dispatch(
+        envelope,
+        base::BindOnce(&MojoDispatchState::OnReply, std::move(state)));
+
+    return pending;
   }
 
   content::RenderFrameHost* rfh_;
