@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Aurelian C4: network intercept + cookie handles.
+// Aurelian C4: network intercept + cookies + request observation + downloads.
 
 #ifndef AURELIAN_HANDLES_NETWORK_NETWORK_HANDLE_H_
 #define AURELIAN_HANDLES_NETWORK_NETWORK_HANDLE_H_
@@ -62,6 +62,25 @@ CookieResult SetCookie(content::BrowserContext* ctx,
 CookieResult DeleteCookie(content::BrowserContext* ctx,
                           const std::string& url,
                           const std::string& name);
+
+// --- Request observation (synchronous log, not streaming) ---
+struct ObservedRequest {
+  std::string url;
+  std::string method;
+};
+
+std::vector<ObservedRequest> GetObservedRequests();
+void ClearObservedRequests();
+
+// --- Download operations (UI thread) ---
+struct DownloadInfo {
+  uint32_t id = 0;
+  std::string url;
+  std::string state;  // "in_progress", "complete", "cancelled", "interrupted"
+};
+
+void StartDownload(content::BrowserContext* ctx, const std::string& url);
+std::vector<DownloadInfo> GetDownloads(content::BrowserContext* ctx);
 
 }  // namespace aurelian
 

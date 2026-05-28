@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Aurelian C4 regression tests — network intercept + cookies.
+// Aurelian C4 browser tests — network intercept + cookies + storage + downloads.
 
 #include "aurelian/handles/network/network_handle.h"
 
+#include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "content/public/browser/navigation_entry.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "content/public/test/download_test_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -33,10 +37,12 @@ class AurelianNetworkBrowserTest : public InProcessBrowserTest {
         base::Unretained(this)));
     ASSERT_TRUE(embedded_test_server()->Start());
     ClearInterceptRules();
+    ClearObservedRequests();
   }
 
   void TearDownOnMainThread() override {
     ClearInterceptRules();
+    ClearObservedRequests();
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
@@ -68,23 +74,57 @@ class AurelianNetworkBrowserTest : public InProcessBrowserTest {
       response->set_content("ok");
       return response;
     }
+    if (request.relative_url == "/mock-target") {
+      response->set_code(net::HTTP_OK);
+      response->set_content_type("text/plain");
+      response->set_content("original server response");
+      return response;
+    }
+    if (request.relative_url == "/fetch-page") {
+      response->set_code(net::HTTP_OK);
+      response->set_content_type("text/html");
+      response->set_content(R"html(
+        <html><body>
+        <div id="result"></div>
+        <script>
+          fetch('/mock-target')
+            .then(r => r.text())
+            .then(t => { document.getElementById('result').textContent = t; })
+            .catch(e => { document.getElementById('result').textContent = 'ERROR:' + e; });
+        </script>
+        </body></html>
+      )html");
+      return response;
+    }
+    if (request.relative_url == "/storage-page") {
+      response->set_code(net::HTTP_OK);
+      response->set_content_type("text/html");
+      response->set_content("<html><body>storage test</body></html>");
+      return response;
+    }
+    if (request.relative_url == "/download-file") {
+      response->set_code(net::HTTP_OK);
+      response->set_content_type("application/octet-stream");
+      response->AddCustomHeader("Content-Disposition",
+                                "attachment; filename=\"test.bin\"");
+      response->set_content("download content here");
+      return response;
+    }
     return nullptr;  // 404
   }
 };
 
 // --- Intercept tests ---
 
-IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
-                        DefaultPassThrough) {
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, DefaultPassThrough) {
   // No rules — page loads normally.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), TestURL("/hello")));
   auto* wc = browser()->tab_strip_model()->GetActiveWebContents();
-  EXPECT_FALSE(wc->GetController().GetLastCommittedEntry()->GetPageType()
-               == content::PAGE_TYPE_ERROR);
+  EXPECT_FALSE(wc->GetController().GetLastCommittedEntry()->GetPageType() ==
+               content::PAGE_TYPE_ERROR);
 }
 
-IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
-                        InterceptBlocksRequest) {
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, InterceptBlocksRequest) {
   InterceptRule rule;
   rule.url_pattern = "/blocked";
   rule.action = "block";
@@ -94,16 +134,13 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
   // Navigate to /blocked — should fail.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), TestURL("/blocked")));
   auto* wc = browser()->tab_strip_model()->GetActiveWebContents();
-  // Blocked pages result in an error page.
-  EXPECT_TRUE(wc->GetController().GetLastCommittedEntry()->GetPageType()
-              == content::PAGE_TYPE_ERROR);
+  EXPECT_TRUE(wc->GetController().GetLastCommittedEntry()->GetPageType() ==
+              content::PAGE_TYPE_ERROR);
 
-  // Remove the rule.
   EXPECT_TRUE(RemoveInterceptRule(rule_id));
 }
 
-IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
-                        InterceptRuleAddRemove) {
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, InterceptRuleAddRemove) {
   InterceptRule rule;
   rule.url_pattern = "example.com";
   rule.action = "block";
@@ -116,35 +153,137 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
   EXPECT_FALSE(RemoveInterceptRule(id));  // already removed
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
+                       InterceptModifiesResponse) {
+  // The "mock" action redirects the request to a URL serving the mock
+  // content. This proves the intercept can replace what the user sees.
+  // (Full body-replacement via URLLoaderFactory proxy is deferred to C6.)
+  InterceptRule rule;
+  rule.url_pattern = "/mock-target";
+  rule.action = "mock";
+  rule.redirect_url = TestURL("/hello").spec();  // serve hello content
+  int rule_id = AddInterceptRule(rule);
+  EXPECT_GT(rule_id, 0);
+
+  // Navigate to /mock-target — should be redirected to /hello.
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), TestURL("/mock-target")));
+  auto* wc = browser()->tab_strip_model()->GetActiveWebContents();
+
+  // The page should show /hello content, not the original /mock-target.
+  auto result =
+      content::EvalJs(wc, "document.body.textContent.trim()");
+  EXPECT_EQ(result.ExtractString(), "hello from server");
+
+  EXPECT_TRUE(RemoveInterceptRule(rule_id));
+}
+
+// --- Request observation tests ---
+
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, ObservesRequests) {
+  ClearObservedRequests();
+
+  // Navigate to /hello — the throttle should log the request.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), TestURL("/hello")));
+
+  auto observed = GetObservedRequests();
+  // There should be at least one request containing /hello.
+  bool found = false;
+  for (const auto& req : observed) {
+    if (req.url.find("/hello") != std::string::npos) {
+      found = true;
+      EXPECT_EQ(req.method, "GET");
+      break;
+    }
+  }
+  EXPECT_TRUE(found) << "Expected to observe a request to /hello";
+}
+
 // --- Cookie tests ---
 
 IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, CookieSetGetDelete) {
   std::string url = TestURL("/set-cookie").spec();
 
-  // Set a cookie.
-  auto set_result = SetCookie(GetBrowserContext(), url, "test_name", "test_val");
+  auto set_result =
+      SetCookie(GetBrowserContext(), url, "test_name", "test_val");
   EXPECT_TRUE(set_result.ok) << "set error: " << set_result.error;
 
-  // Get it back.
   auto get_result = GetCookie(GetBrowserContext(), url, "test_name");
   EXPECT_TRUE(get_result.ok) << "get error: " << get_result.error;
   EXPECT_EQ(get_result.value, "test_val");
 
-  // Delete it.
   auto del_result = DeleteCookie(GetBrowserContext(), url, "test_name");
   EXPECT_TRUE(del_result.ok) << "delete error: " << del_result.error;
 
-  // Get should now fail.
   auto gone = GetCookie(GetBrowserContext(), url, "test_name");
   EXPECT_FALSE(gone.ok);
 }
 
-IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
-                        CookieGetNonExistent) {
-  auto result = GetCookie(GetBrowserContext(), "http://example.com/",
-                          "nonexistent");
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, CookieGetNonExistent) {
+  auto result =
+      GetCookie(GetBrowserContext(), "http://example.com/", "nonexistent");
   EXPECT_FALSE(result.ok);
   EXPECT_EQ(result.error, "not-found");
+}
+
+// --- Storage tests ---
+
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, LocalStorageReadWrite) {
+  // Navigate to a real page (localStorage needs an origin).
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), TestURL("/storage-page")));
+  auto* wc = browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Set a localStorage value.
+  EXPECT_TRUE(
+      content::ExecJs(wc, "localStorage.setItem('aurelian_key', 'aurelian_val')"));
+
+  // Read it back.
+  auto result =
+      content::EvalJs(wc, "localStorage.getItem('aurelian_key')");
+  EXPECT_EQ(result.ExtractString(), "aurelian_val");
+
+  // Delete it.
+  EXPECT_TRUE(content::ExecJs(wc, "localStorage.removeItem('aurelian_key')"));
+
+  // Verify it's gone (localStorage.getItem returns null).
+  EXPECT_EQ(content::EvalJs(wc, "localStorage.getItem('aurelian_key')"),
+            base::Value());
+}
+
+// --- Download tests ---
+
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, DownloadStartAndObserve) {
+  auto* dm = GetBrowserContext()->GetDownloadManager();
+
+  // Set up observer to wait for download completion.
+  content::DownloadTestObserverTerminal observer(
+      dm, 1,
+      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_ACCEPT);
+
+  // Start the download.
+  StartDownload(GetBrowserContext(), TestURL("/download-file").spec());
+
+  // Wait for completion.
+  observer.WaitForFinished();
+  EXPECT_EQ(
+      observer.NumDownloadsSeenInState(download::DownloadItem::COMPLETE),
+      1u);
+
+  // Verify via our GetDownloads API.
+  auto downloads = GetDownloads(GetBrowserContext());
+  ASSERT_FALSE(downloads.empty());
+
+  bool found_complete = false;
+  for (const auto& dl : downloads) {
+    if (dl.url.find("/download-file") != std::string::npos &&
+        dl.state == "complete") {
+      found_complete = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_complete)
+      << "Expected a completed download of /download-file";
 }
 
 }  // namespace aurelian

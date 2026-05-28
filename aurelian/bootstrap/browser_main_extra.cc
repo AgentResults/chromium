@@ -17,7 +17,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents.h"
-#include "velite/agentspaces-wire/actorspace.hpp"
+#include "velite/agentspaces-wire/agentspace.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
 
@@ -75,11 +75,11 @@ int64_t NextTabId() {
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// BrowserMainExtraImpl — owns the ActorSpace, handles, and observers
+// BrowserMainExtraImpl — owns the AgentSpace, handles, and observers
 // ---------------------------------------------------------------------------
 struct BrowserMainExtraImpl : public BrowserListObserver,
                               public TabStripModelObserver {
-  std::shared_ptr<velite::agentspaces::ActorSpace> actor_space;
+  std::shared_ptr<velite::agentspaces::AgentSpace> actor_space;
   std::shared_ptr<ChromeRootHandle> root;
   std::unique_ptr<TabsHandleImpl> tabs_handle;
 
@@ -166,9 +166,9 @@ BrowserMainExtra::~BrowserMainExtra() = default;
 void BrowserMainExtra::PostCreateThreads() {
   impl_ = std::make_unique<BrowserMainExtraImpl>();
 
-  // 1. Create the browser-process ActorSpace.
+  // 1. Create the browser-process AgentSpace.
   impl_->actor_space =
-      velite::agentspaces::ActorSpace::make("chrome-browser");
+      velite::agentspaces::AgentSpace::make("chrome-browser");
 
   // 2. Mount the root handle.
   impl_->root = ChromeRootHandle::make();

@@ -47,6 +47,7 @@ _velite_include_dirs = [
   "$_velite_src/agent/include",
   "$_velite_src/agent-replay/include",
   "$_velite_src/cap-bits/include",
+  "$_velite_src/cells/include",
   "$_velite_src/replay-handle/include",
   "$_velite_src/mt/runtime/include",
   "$_velite_src/mt/compiler/include",
@@ -375,7 +376,7 @@ source_set("velite_mt") {
 # --- Agentspaces-wire (has handle.cpp — collides with handle/) ---
 source_set("velite_wire") {
   sources = [
-    "$_velite_src/agentspaces-wire/src/actorspace.cpp",
+    "$_velite_src/agentspaces-wire/src/agentspace.cpp",
     "$_velite_src/agentspaces-wire/src/capability_handle.cpp",
     "$_velite_src/agentspaces-wire/src/component_instance_handle.cpp",
     "$_velite_src/agentspaces-wire/src/component_registry_handle.cpp",

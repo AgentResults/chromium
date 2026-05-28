@@ -8,12 +8,16 @@
 
 #include "base/logging.h"
 #include "base/run_loop.h"
+#include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_url_parameters.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/download_manager.h"
 #include "content/public/browser/storage_partition.h"
 #include "net/base/net_errors.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_options.h"
 #include "net/cookies/cookie_util.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "url/gurl.h"
@@ -42,7 +46,18 @@ std::vector<InterceptRule>& RuleStore() {
 
 int next_rule_id = 1;
 
-// The Aurelian URLLoaderThrottle — applies intercept rules.
+// Thread-safe request observation log.
+std::mutex& ObsMutex() {
+  static auto* mu = new std::mutex();
+  return *mu;
+}
+
+std::vector<ObservedRequest>& ObsStore() {
+  static auto* store = new std::vector<ObservedRequest>();
+  return *store;
+}
+
+// The Aurelian URLLoaderThrottle — applies intercept rules + observes.
 class AurelianURLThrottle : public blink::URLLoaderThrottle {
  public:
   AurelianURLThrottle() = default;
@@ -51,9 +66,20 @@ class AurelianURLThrottle : public blink::URLLoaderThrottle {
   void WillStartRequest(network::ResourceRequest* request,
                         bool* defer) override {
     std::string url = request->url.spec();
+
+    // Log the request for observation.
+    {
+      std::lock_guard<std::mutex> lock(ObsMutex());
+      ObservedRequest obs;
+      obs.url = url;
+      obs.method = request->method;
+      ObsStore().push_back(std::move(obs));
+    }
+
     std::lock_guard<std::mutex> lock(RuleMutex());
     for (const auto& rule : RuleStore()) {
-      if (url.find(rule.url_pattern) == std::string::npos) continue;
+      if (url.find(rule.url_pattern) == std::string::npos)
+        continue;
 
       if (rule.action == "block") {
         delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT);
@@ -63,9 +89,17 @@ class AurelianURLThrottle : public blink::URLLoaderThrottle {
         request->url = GURL(rule.redirect_url);
         return;
       }
+      if (rule.action == "mock" && !rule.redirect_url.empty()) {
+        // Mock by redirecting to a URL that serves the mock content.
+        // Full body-replacement mock (InterceptResponse) deferred to C6
+        // URLLoaderFactory proxy.
+        request->url = GURL(rule.redirect_url);
+        return;
+      }
     }
     // Default pass-through — no rules matched.
   }
+
 };
 
 }  // namespace
@@ -103,6 +137,18 @@ void ClearInterceptRules() {
 
 std::unique_ptr<blink::URLLoaderThrottle> CreateAurelianThrottle() {
   return std::make_unique<AurelianURLThrottle>();
+}
+
+// --- Request observation API ---
+
+std::vector<ObservedRequest> GetObservedRequests() {
+  std::lock_guard<std::mutex> lock(ObsMutex());
+  return ObsStore();
+}
+
+void ClearObservedRequests() {
+  std::lock_guard<std::mutex> lock(ObsMutex());
+  ObsStore().clear();
 }
 
 // --- Cookie API (UI thread, synchronous via RunLoop) ---
@@ -200,6 +246,48 @@ CookieResult DeleteCookie(content::BrowserContext* ctx,
           },
           &result, &loop));
   loop.Run();
+  return result;
+}
+
+// --- Download API (UI thread) ---
+
+void StartDownload(content::BrowserContext* ctx, const std::string& url) {
+  auto* dm = ctx->GetDownloadManager();
+  auto params = std::make_unique<download::DownloadUrlParameters>(
+      GURL(url), TRAFFIC_ANNOTATION_FOR_TESTS);
+  dm->DownloadUrl(std::move(params));
+}
+
+std::vector<DownloadInfo> GetDownloads(content::BrowserContext* ctx) {
+  auto* dm = ctx->GetDownloadManager();
+  content::DownloadManager::DownloadVector items;
+  dm->GetAllDownloads(&items);
+
+  std::vector<DownloadInfo> result;
+  result.reserve(items.size());
+  for (const auto& item : items) {
+    DownloadInfo info;
+    info.id = item->GetId();
+    info.url = item->GetURL().spec();
+    switch (item->GetState()) {
+      case download::DownloadItem::IN_PROGRESS:
+        info.state = "in_progress";
+        break;
+      case download::DownloadItem::COMPLETE:
+        info.state = "complete";
+        break;
+      case download::DownloadItem::CANCELLED:
+        info.state = "cancelled";
+        break;
+      case download::DownloadItem::INTERRUPTED:
+        info.state = "interrupted";
+        break;
+      default:
+        info.state = "unknown";
+        break;
+    }
+    result.push_back(std::move(info));
+  }
   return result;
 }
 
