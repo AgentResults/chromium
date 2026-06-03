@@ -107,6 +107,24 @@ if (enable_aurelian) {
     ]
   }
 
+  # DevTools CDP-compat command surface (C7.d). No RTTI.
+  source_set("aurelian_devtools") {
+    sources = [
+      "handles/browser/devtools_handle.cc",
+      "handles/browser/devtools_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Permissions query / grant / revoke via content settings (C7.c). No RTTI.
   source_set("aurelian_permissions") {
     sources = [
@@ -269,6 +287,7 @@ if (enable_aurelian) {
     sources = [
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
+      "handles/browser/devtools_handle_browsertest.cc",
       "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
       "handles/browser/permissions_handle_browsertest.cc",
@@ -287,6 +306,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_a11y",
+      ":aurelian_devtools",
       ":aurelian_extensions",
       ":aurelian_handles",
       ":aurelian_network",
