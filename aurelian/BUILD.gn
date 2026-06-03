@@ -68,6 +68,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # Accessibility tree snapshot (C7.a). No RTTI (plain content/ui APIs).
+  source_set("aurelian_a11y") {
+    sources = [
+      "handles/browser/accessibility_handle.cc",
+      "handles/browser/accessibility_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//ui/accessibility",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Find-in-page observer glue. Kept in a SEPARATE no-RTTI source_set: it
   # subclasses find_in_page::FindResultObserver (-> base::CheckedObserver),
   # whose typeinfo is not emitted in Chromium's no-RTTI build. Subclassing it
@@ -208,6 +227,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
@@ -224,6 +244,7 @@ if (enable_aurelian) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
     deps = [
+      ":aurelian_a11y",
       ":aurelian_handles",
       ":aurelian_network",
       ":aurelian_streams",
