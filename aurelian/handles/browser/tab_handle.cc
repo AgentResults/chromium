@@ -9,19 +9,28 @@
 #include <string>
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
+#include "base/base64.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/bind_post_task.h"
 #include "content/public/browser/global_routing_id.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/geometry/size.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/input/web_gesture_device.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
@@ -607,6 +616,139 @@ class AurelianInputHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// PendingValueHandle — generic async leaf: starts Pending, settles to a
+// ResolvedValue or Broken when an out-of-band callback fires (C5.b+).
+// ---------------------------------------------------------------------------
+class PendingValueHandle : public Handle {
+ public:
+  static std::shared_ptr<PendingValueHandle> make() {
+    return std::shared_ptr<PendingValueHandle>(new PendingValueHandle());
+  }
+
+  StateKind state_kind() const override { return kind_; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return broken_; }
+  std::string sturdy_identity() const override { return ""; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view, const V&) override {
+    return VH::make_broken("not-callable");
+  }
+  void tell(std::string_view, const V&) override {}
+
+  void Resolve(V v) {
+    value_ = std::move(v);
+    kind_ = StateKind::ResolvedValue;
+  }
+  void Break(const std::string& reason) {
+    broken_ = reason;
+    kind_ = StateKind::Broken;
+  }
+
+ private:
+  PendingValueHandle() = default;
+  StateKind kind_ = StateKind::Pending;
+  V value_;
+  std::string broken_;
+};
+
+// CopyFromSurface completion: encode the bitmap as a base64 PNG and settle.
+// Always invoked on the UI thread (the call is wrapped in BindPostTask).
+void OnScreenshotCaptured(std::weak_ptr<PendingValueHandle> weak,
+                          const content::CopyFromSurfaceResult& result) {
+  auto h = weak.lock();
+  if (!h) return;
+  if (!result.has_value()) {
+    h->Break("capture-failed");
+    return;
+  }
+  const SkBitmap& bitmap = result->bitmap;
+  if (bitmap.drawsNothing()) {
+    h->Break("capture-empty");
+    return;
+  }
+  std::optional<std::vector<uint8_t>> png =
+      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
+  if (!png) {
+    h->Break("encode-failed");
+    return;
+  }
+  h->Resolve(V(base::Base64Encode(*png)));
+}
+
+// ---------------------------------------------------------------------------
+// ScreenshotHandle — compositor capture of the tab's surface (C5.b).
+// ---------------------------------------------------------------------------
+class AurelianScreenshotHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianScreenshotHandle> make(
+      base::WeakPtr<content::WebContents> wc,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianScreenshotHandle>(
+        new AurelianScreenshotHandle(std::move(wc), tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& spec) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+    if (msg == "capture") return DoCapture(spec);
+    return VH::make_broken("not-callable");
+  }
+
+  void tell(std::string_view, const V&) override {}
+
+ private:
+  AurelianScreenshotHandle(base::WeakPtr<content::WebContents> wc,
+                           int64_t tab_id)
+      : wc_(std::move(wc)),
+        uri_("legion://chrome/browser/tabs/" + base::NumberToString(tab_id) +
+             "/screenshot"),
+        value_(uri_) {}
+
+  std::shared_ptr<Handle> DoCapture(const V& spec) {
+    std::string format = "png";
+    const V* fmt = spec.object_get("format");
+    if (fmt && fmt->is_string()) format = fmt->as_string();
+    if (format != "png") return VH::make_broken("unsupported-format");
+
+    auto* wc = wc_.get();
+    if (!wc) return VH::make_broken("gone");
+    auto* view = wc->GetRenderWidgetHostView();
+    if (!view) return VH::make_broken("gone");
+
+    gfx::Rect src_rect;  // empty == whole surface
+    const V* clip = spec.object_get("clip");
+    if (clip && clip->is_object()) {
+      int x = static_cast<int>(NumField(*clip, "x", 0));
+      int y = static_cast<int>(NumField(*clip, "y", 0));
+      int w = static_cast<int>(NumField(*clip, "width", 0));
+      int h = static_cast<int>(NumField(*clip, "height", 0));
+      if (w > 0 && h > 0) src_rect = gfx::Rect(x, y, w, h);
+    }
+
+    auto pending = PendingValueHandle::make();
+    std::weak_ptr<PendingValueHandle> weak = pending;
+    view->CopyFromSurface(
+        src_rect, gfx::Size(), base::Seconds(5),
+        base::BindPostTask(
+            content::GetUIThreadTaskRunner({}),
+            base::BindOnce(&OnScreenshotCaptured, std::move(weak))));
+    return pending;
+  }
+
+  base::WeakPtr<content::WebContents> wc_;
+  std::string uri_;
+  V value_;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -640,6 +782,8 @@ class AurelianTabHandle : public Handle {
       return AurelianNavigationHandle::make(wc_, tab_id_);
     if (msg == "input")
       return AurelianInputHandle::make(wc_, tab_id_);
+    if (msg == "screenshot")
+      return AurelianScreenshotHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},
