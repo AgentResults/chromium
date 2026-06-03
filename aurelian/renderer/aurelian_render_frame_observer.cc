@@ -189,6 +189,37 @@ constexpr char kInstallMutationObserverJs[] = R"JS(
 })()
 )JS";
 
+// Installs an idempotent console interceptor that wraps console.{log,info,warn,
+// error,debug}, pushing a `{level,text}` JSON object per call into a main-world
+// queue the native drain timer reads. Original console behaviour is preserved
+// (devtools still sees the messages). __aurelian_console_init lets a subscriber
+// confirm the interceptor is live before logging.
+constexpr char kInstallConsoleInterceptorJs[] = R"JS(
+(function(){
+  if (window.__aurelian_console_init) return true;
+  window.__aurelian_console_init = true;
+  window.__aurelian_console_queue = [];
+  var levels = ['log','info','warn','error','debug'];
+  levels.forEach(function(lvl){
+    var orig = console[lvl] ? console[lvl].bind(console) : null;
+    console[lvl] = function(){
+      try {
+        var parts = [];
+        for (var i=0;i<arguments.length;i++){
+          var a = arguments[i];
+          if (typeof a === 'string') { parts.push(a); }
+          else { try { parts.push(JSON.stringify(a)); } catch(e){ parts.push(String(a)); } }
+        }
+        window.__aurelian_console_queue.push(
+            JSON.stringify({level:lvl, text:parts.join(' ')}));
+      } catch(e){}
+      if (orig) orig.apply(console, arguments);
+    };
+  });
+  return true;
+})()
+)JS";
+
 void AurelianRenderFrameObserver::Subscribe(
     const std::vector<uint8_t>& envelope,
     SubscribeCallback callback) {
@@ -202,9 +233,12 @@ void AurelianRenderFrameObserver::Subscribe(
       rs->sink.BindNewPipeAndPassReceiver();
 
   // Install the producer BEFORE replying, so a subscriber that waits for the
-  // reply (or for __aurelian_mut_init) cannot race ahead of the producer.
+  // reply (or for __aurelian_mut_init / __aurelian_console_init) cannot race
+  // ahead of the producer.
   if (stream == "mutations") {
     EvalString(kInstallMutationObserverJs);
+  } else if (stream == "console") {
+    EvalString(kInstallConsoleInterceptorJs);
   }
 
   std::move(callback).Run(std::move(receiver));
@@ -226,6 +260,11 @@ void AurelianRenderFrameObserver::Subscribe(
     raw->timer.Start(
         FROM_HERE, base::Milliseconds(50),
         base::BindRepeating(&AurelianRenderFrameObserver::DrainMutationFrames,
+                            weak_factory_.GetWeakPtr(), raw));
+  } else if (stream == "console") {
+    raw->timer.Start(
+        FROM_HERE, base::Milliseconds(50),
+        base::BindRepeating(&AurelianRenderFrameObserver::DrainConsoleFrames,
                             weak_factory_.GetWeakPtr(), raw));
   }
 
@@ -249,11 +288,8 @@ void AurelianRenderFrameObserver::EmitTestFrame(RendererStream* stream) {
   stream->sink->Frame(std::vector<uint8_t>(f.begin(), f.end()));
 }
 
-void AurelianRenderFrameObserver::DrainMutationFrames(RendererStream* stream) {
-  // Pull and clear the queued mutation labels (separated by \x01).
-  std::string joined = EvalString(
-      "(window.__aurelian_mut_queue?"
-      "window.__aurelian_mut_queue.splice(0).join(String.fromCharCode(1)):'')");
+void AurelianRenderFrameObserver::EmitJoinedFrames(RendererStream* stream,
+                                                   const std::string& joined) {
   if (joined.empty()) return;
   size_t start = 0;
   while (start <= joined.size()) {
@@ -267,6 +303,21 @@ void AurelianRenderFrameObserver::DrainMutationFrames(RendererStream* stream) {
     if (end == std::string::npos) break;
     start = end + 1;
   }
+}
+
+void AurelianRenderFrameObserver::DrainMutationFrames(RendererStream* stream) {
+  // Pull and clear the queued mutation labels (separated by \x01).
+  EmitJoinedFrames(stream, EvalString(
+      "(window.__aurelian_mut_queue?"
+      "window.__aurelian_mut_queue.splice(0).join(String.fromCharCode(1)):'')"));
+}
+
+void AurelianRenderFrameObserver::DrainConsoleFrames(RendererStream* stream) {
+  // Pull and clear the queued {level,text} JSON frames (separated by \x01).
+  EmitJoinedFrames(stream, EvalString(
+      "(window.__aurelian_console_queue?"
+      "window.__aurelian_console_queue.splice(0).join(String.fromCharCode(1))"
+      ":'')"));
 }
 
 void AurelianRenderFrameObserver::OnStreamDisconnect(RendererStream* stream) {

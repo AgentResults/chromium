@@ -173,4 +173,57 @@ IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, ReceivesMutations) {
       << "expected an attributes/childList mutation frame";
 }
 
+// C6.d — the renderer /console producer (console.* interceptor) delivers a
+// frame per console message over Mojo, carrying the level + text.
+IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, ReceivesConsole) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<body>console</body>")));
+
+  mojo::AssociatedRemote<mojom::AurelianWire> wire;
+  GetWire(&wire);
+
+  std::vector<std::string> frames;
+  MojoStreamBridge bridge(base::BindRepeating(
+      [](std::vector<std::string>* f, const std::vector<uint8_t>& bytes) {
+        f->emplace_back(bytes.begin(), bytes.end());
+      },
+      &frames));
+  bridge.Subscribe(wire, "console");
+
+  // Wait until the renderer has installed the console interceptor (it does so
+  // in Subscribe, before replying), so the log below cannot race it.
+  EXPECT_EQ(true,
+            content::EvalJs(
+                GetWC(),
+                "(async()=>{for(let i=0;i<200;i++){"
+                "if(window.__aurelian_console_init)return true;"
+                "await new Promise(r=>setTimeout(r,10));}return false;})()")
+                .ExtractBool());
+
+  // Emit console messages at two levels.
+  ASSERT_TRUE(content::ExecJs(
+      GetWC(),
+      "console.log('hello-aurelian-console', 42);"
+      "console.warn('a-warning');"));
+
+  PumpUntil(base::BindLambdaForTesting([&]() { return frames.size() >= 2u; }),
+            base::Seconds(10));
+  ASSERT_GE(frames.size(), 2u) << "no console frames arrived";
+
+  bool found_log = false;
+  bool found_warn = false;
+  for (const auto& f : frames) {
+    if (f.find("hello-aurelian-console") != std::string::npos &&
+        f.find("\"log\"") != std::string::npos) {
+      found_log = true;
+    }
+    if (f.find("a-warning") != std::string::npos &&
+        f.find("\"warn\"") != std::string::npos) {
+      found_warn = true;
+    }
+  }
+  EXPECT_TRUE(found_log) << "expected a log-level frame carrying the message";
+  EXPECT_TRUE(found_warn) << "expected a warn-level frame carrying the message";
+}
+
 }  // namespace aurelian
