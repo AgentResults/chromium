@@ -170,6 +170,27 @@ if (enable_aurelian) {
     ]
   }
 
+  # Cap-token attenuation: predicates (C8.a) + signed delegation chain (C8.b).
+  # No RTTI; uses Velite's crypto free functions for Ed25519.
+  source_set("aurelian_capability") {
+    sources = [
+      "capability/cap_predicate.cc",
+      "capability/cap_predicate.h",
+    ]
+
+    deps = [
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Subscription stream producer (C6). No RTTI (no dynamic_cast here; uses
   # Velite's SubscriptionHandle, whose typeinfo is provided by //velite).
   source_set("aurelian_streams") {
@@ -262,9 +283,13 @@ if (enable_aurelian) {
 
   # Unit tests — pure in-process substrate/handle logic (no browser).
   test("aurelian_unittests") {
-    sources = [ "handles/streams/subscription_producer_unittest.cc" ]
+    sources = [
+      "capability/cap_predicate_unittest.cc",
+      "handles/streams/subscription_producer_unittest.cc",
+    ]
 
     deps = [
+      ":aurelian_capability",
       ":aurelian_streams",
       "//base",
       "//base/test:run_all_unittests",
