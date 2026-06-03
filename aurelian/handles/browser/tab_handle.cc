@@ -6,12 +6,16 @@
 
 #include <cctype>
 #include <map>
+#include <optional>
 #include <string>
+#include <variant>
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "base/base64.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/bind_post_task.h"
 #include "content/public/browser/global_routing_id.h"
@@ -19,6 +23,10 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/printing/browser/print_to_pdf/pdf_print_job.h"
+#include "components/printing/browser/print_to_pdf/pdf_print_result.h"
+#include "components/printing/browser/print_to_pdf/pdf_print_utils.h"
+#include "components/printing/common/print.mojom.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
@@ -28,6 +36,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "printing/buildflags/buildflags.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/size.h"
@@ -749,6 +758,123 @@ class AurelianScreenshotHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// PrintHandle — render the loaded page to a PDF (C5.c).
+// ---------------------------------------------------------------------------
+#if BUILDFLAG(ENABLE_PRINTING)
+// PdfPrintJob completion: base64-encode the PDF bytes and settle. The
+// PrintRenderFrame remote is carried (and kept alive) until the job ends.
+void OnPrintToPdfDone(
+    std::weak_ptr<PendingValueHandle> weak,
+    std::unique_ptr<mojo::AssociatedRemote<printing::mojom::PrintRenderFrame>>
+    /*keepalive*/,
+    print_to_pdf::PdfPrintResult result,
+    scoped_refptr<base::RefCountedMemory> data) {
+  auto h = weak.lock();
+  if (!h) return;
+  if (result != print_to_pdf::PdfPrintResult::kPrintSuccess || !data) {
+    h->Break("print-failed:" + print_to_pdf::PdfPrintResultToString(result));
+    return;
+  }
+  h->Resolve(V(base::Base64Encode(base::span<const uint8_t>(*data))));
+}
+#endif  // BUILDFLAG(ENABLE_PRINTING)
+
+class AurelianPrintHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianPrintHandle> make(
+      base::WeakPtr<content::WebContents> wc,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianPrintHandle>(
+        new AurelianPrintHandle(std::move(wc), tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& spec) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+    if (msg == "printToPdf") return DoPrint(spec);
+    return VH::make_broken("not-callable");
+  }
+
+  void tell(std::string_view, const V&) override {}
+
+ private:
+  AurelianPrintHandle(base::WeakPtr<content::WebContents> wc, int64_t tab_id)
+      : wc_(std::move(wc)),
+        uri_("legion://chrome/browser/tabs/" + base::NumberToString(tab_id) +
+             "/print"),
+        value_(uri_) {}
+
+  std::shared_ptr<Handle> DoPrint(const V& spec) {
+#if BUILDFLAG(ENABLE_PRINTING)
+    auto* wc = wc_.get();
+    if (!wc) return VH::make_broken("gone");
+    auto* rfh = wc->GetPrimaryMainFrame();
+    if (!rfh || !rfh->IsRenderFrameLive()) return VH::make_broken("gone");
+
+    auto opt_bool = [&](const char* k) -> std::optional<bool> {
+      const V* v = spec.object_get(k);
+      if (v && v->is_bool()) return v->as_bool();
+      return std::nullopt;
+    };
+    auto opt_double = [&](const char* k) -> std::optional<double> {
+      const V* v = spec.object_get(k);
+      if (v && v->is_double()) return v->as_double();
+      if (v && v->is_int()) return static_cast<double>(v->as_int());
+      return std::nullopt;
+    };
+    auto opt_str = [&](const char* k) -> std::optional<std::string> {
+      const V* v = spec.object_get(k);
+      if (v && v->is_string()) return v->as_string();
+      return std::nullopt;
+    };
+
+    std::string page_ranges;
+    if (auto pr = opt_str("pageRanges")) page_ranges = *pr;
+
+    std::variant<printing::mojom::PrintPagesParamsPtr, std::string> params =
+        print_to_pdf::GetPrintPagesParams(
+            rfh->GetLastCommittedURL(), opt_bool("landscape"),
+            opt_bool("displayHeaderFooter"), opt_bool("printBackground"),
+            opt_double("scale"), opt_double("paperWidth"),
+            opt_double("paperHeight"), opt_double("marginTop"),
+            opt_double("marginBottom"), opt_double("marginLeft"),
+            opt_double("marginRight"), opt_str("headerTemplate"),
+            opt_str("footerTemplate"), opt_bool("preferCssPageSize"),
+            opt_bool("generateTaggedPdf"), opt_bool("generateDocumentOutline"));
+    if (std::holds_alternative<std::string>(params)) {
+      return VH::make_broken("bad-print-params");
+    }
+
+    auto remote = std::make_unique<
+        mojo::AssociatedRemote<printing::mojom::PrintRenderFrame>>();
+    rfh->GetRemoteAssociatedInterfaces()->GetInterface(remote.get());
+    auto* remote_ref = remote.get();
+
+    auto pending = PendingValueHandle::make();
+    std::weak_ptr<PendingValueHandle> weak = pending;
+    print_to_pdf::PdfPrintJob::StartJob(
+        wc, rfh, *remote_ref, page_ranges,
+        std::move(std::get<printing::mojom::PrintPagesParamsPtr>(params)),
+        base::BindOnce(&OnPrintToPdfDone, std::move(weak), std::move(remote)));
+    return pending;
+#else
+    return VH::make_broken("printing-unavailable");
+#endif  // BUILDFLAG(ENABLE_PRINTING)
+  }
+
+  base::WeakPtr<content::WebContents> wc_;
+  std::string uri_;
+  V value_;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -784,6 +910,8 @@ class AurelianTabHandle : public Handle {
       return AurelianInputHandle::make(wc_, tab_id_);
     if (msg == "screenshot")
       return AurelianScreenshotHandle::make(wc_, tab_id_);
+    if (msg == "print")
+      return AurelianPrintHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},
