@@ -108,6 +108,7 @@ if (enable_aurelian) {
       "//components/printing/browser/print_to_pdf",
       "//components/printing/common:mojo_interfaces",
       "//components/viz/common",
+      "//components/zoom",
       "//content/public/browser",
       "//mojo/public/cpp/bindings",
       "//printing/buildflags",
@@ -167,6 +168,7 @@ if (enable_aurelian) {
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
+      "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
     ]

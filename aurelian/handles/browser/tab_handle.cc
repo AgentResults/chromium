@@ -30,6 +30,7 @@
 #include "components/printing/browser/print_to_pdf/pdf_print_utils.h"
 #include "components/printing/common/print.mojom.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "components/zoom/zoom_controller.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -990,6 +991,73 @@ class AurelianFindHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// ZoomHandle — per-tab page zoom over zoom::ZoomController (C5.e).
+// ---------------------------------------------------------------------------
+class AurelianZoomHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianZoomHandle> make(
+      base::WeakPtr<content::WebContents> wc,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianZoomHandle>(
+        new AurelianZoomHandle(std::move(wc), tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& /*spec*/) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+    zoom::ZoomController* zc = Controller();
+    if (!zc) return VH::make_broken("gone");
+    if (msg == "level") return VH::make(V(zc->GetZoomLevel()));
+    if (msg == "percent")
+      return VH::make(V(static_cast<int64_t>(zc->GetZoomPercent())));
+    if (msg == "default") return VH::make(V(zc->GetDefaultZoomLevel()));
+    return VH::make_broken("not-callable");
+  }
+
+  void tell(std::string_view msg, const V& data) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    zoom::ZoomController* zc = Controller();
+    if (!zc) return;
+    if (msg == "setZoom") {
+      const V* level = data.object_get("level");
+      if (!level) return;
+      double lvl = level->is_double() ? level->as_double()
+                   : level->is_int()  ? static_cast<double>(level->as_int())
+                                      : 0.0;
+      // Per-tab zoom: ISOLATED mode keeps this level off the shared
+      // per-host zoom map, so other tabs (incl. same-host) are unaffected.
+      zc->SetZoomMode(zoom::ZoomController::ZOOM_MODE_ISOLATED);
+      zc->SetZoomLevel(lvl);
+    } else if (msg == "reset") {
+      zc->SetZoomLevel(zc->GetDefaultZoomLevel());
+    }
+  }
+
+ private:
+  AurelianZoomHandle(base::WeakPtr<content::WebContents> wc, int64_t tab_id)
+      : wc_(std::move(wc)),
+        uri_("legion://chrome/browser/tabs/" + base::NumberToString(tab_id) +
+             "/zoom"),
+        value_(uri_) {}
+
+  zoom::ZoomController* Controller() {
+    auto* wc = wc_.get();
+    return wc ? zoom::ZoomController::FromWebContents(wc) : nullptr;
+  }
+
+  base::WeakPtr<content::WebContents> wc_;
+  std::string uri_;
+  V value_;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -1029,6 +1097,8 @@ class AurelianTabHandle : public Handle {
       return AurelianPrintHandle::make(wc_, tab_id_);
     if (msg == "find")
       return AurelianFindHandle::make(wc_, tab_id_);
+    if (msg == "zoom")
+      return AurelianZoomHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},
