@@ -6,6 +6,11 @@
 
 #include "aurelian/handles/network/network_handle.h"
 
+#include "base/functional/bind.h"
+#include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -52,6 +57,30 @@ class AurelianNetworkBrowserTest : public InProcessBrowserTest {
 
   content::BrowserContext* GetBrowserContext() {
     return browser()->profile();
+  }
+
+  // Spin the loop until `cond` is true or `limit` elapses.
+  void PumpUntil(base::RepeatingCallback<bool()> cond, base::TimeDelta limit) {
+    if (cond.Run()) return;
+    base::RunLoop run_loop;
+    base::RepeatingTimer timer;
+    timer.Start(FROM_HERE, base::Milliseconds(10),
+                base::BindRepeating(
+                    [](base::RunLoop* loop, base::RepeatingCallback<bool()> c) {
+                      if (c.Run()) loop->Quit();
+                    },
+                    &run_loop, cond));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), limit);
+    run_loop.Run();
+    timer.Stop();
+  }
+
+  void PumpFor(base::TimeDelta delay) {
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), delay);
+    run_loop.Run();
   }
 
  private:
@@ -197,6 +226,57 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, ObservesRequests) {
     }
   }
   EXPECT_TRUE(found) << "Expected to observe a request to /hello";
+}
+
+// --- Request observation STREAM tests (C6.e) ---
+
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, ReceivesRequestStream) {
+  // Subscribe BEFORE navigating; each observed request is delivered as a frame.
+  std::vector<ObservedRequest> frames;
+  auto sub = SubscribeRequests(base::BindLambdaForTesting(
+      [&](const ObservedRequest& r) { frames.push_back(r); }));
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), TestURL("/hello")));
+
+  PumpUntil(base::BindLambdaForTesting([&]() {
+              for (const auto& r : frames) {
+                if (r.url.find("/hello") != std::string::npos) return true;
+              }
+              return false;
+            }),
+            base::Seconds(10));
+
+  bool found = false;
+  for (const auto& r : frames) {
+    if (r.url.find("/hello") != std::string::npos) {
+      found = true;
+      EXPECT_EQ(r.method, "GET");
+      break;
+    }
+  }
+  EXPECT_TRUE(found) << "expected a streamed request frame for /hello";
+}
+
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, RequestStreamCancelStops) {
+  std::vector<ObservedRequest> frames;
+  auto sub = SubscribeRequests(base::BindLambdaForTesting(
+      [&](const ObservedRequest& r) { frames.push_back(r); }));
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), TestURL("/hello")));
+  PumpUntil(base::BindLambdaForTesting([&]() { return !frames.empty(); }),
+            base::Seconds(10));
+  ASSERT_FALSE(frames.empty());
+
+  // Cancel by dropping the subscription, then drain any in-flight frame.
+  sub.reset();
+  PumpFor(base::Milliseconds(200));
+  size_t count = frames.size();
+
+  // Navigate again — generates fresh requests, but none should be delivered.
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser(), TestURL("/storage-page")));
+  PumpFor(base::Milliseconds(300));
+  EXPECT_EQ(frames.size(), count) << "frames kept arriving after cancel";
 }
 
 // --- Cookie tests ---

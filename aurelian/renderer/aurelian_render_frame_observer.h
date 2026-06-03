@@ -59,6 +59,7 @@ class AurelianRenderFrameObserver
   void EmitTestFrame(RendererStream* stream);
   void DrainMutationFrames(RendererStream* stream);
   void DrainConsoleFrames(RendererStream* stream);
+  void DrainEventFrames(RendererStream* stream);
   // Splits `joined` (frames separated by \x01) and emits one VeliteSink Frame
   // per non-empty piece. Shared by the mutation + console drains.
   void EmitJoinedFrames(RendererStream* stream, const std::string& joined);

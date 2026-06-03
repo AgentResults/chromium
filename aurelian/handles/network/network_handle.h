@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
 
 namespace content {
@@ -71,6 +72,22 @@ struct ObservedRequest {
 
 std::vector<ObservedRequest> GetObservedRequests();
 void ClearObservedRequests();
+
+// --- Request observation as a stream (C6.e) ---
+// Each request the throttle observes is delivered to every active subscriber's
+// callback, on the sequence that called SubscribeRequests. Destroy the returned
+// handle to cancel — delivery stops immediately (in-flight frames are dropped).
+// SubscribeRequests + the returned handle's destruction MUST run on the same
+// sequence (the delivery sequence).
+using RequestFrameCallback =
+    base::RepeatingCallback<void(const ObservedRequest&)>;
+
+class RequestSubscription {
+ public:
+  virtual ~RequestSubscription() = default;
+};
+
+std::unique_ptr<RequestSubscription> SubscribeRequests(RequestFrameCallback cb);
 
 // --- Download operations (UI thread) ---
 struct DownloadInfo {

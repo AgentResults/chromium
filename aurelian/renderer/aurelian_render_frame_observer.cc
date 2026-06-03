@@ -220,6 +220,33 @@ constexpr char kInstallConsoleInterceptorJs[] = R"JS(
 })()
 )JS";
 
+// Installs an idempotent capture-phase event tap on the document for a default
+// set of DOM event types, pushing a `{type,target}` JSON object per event into
+// a main-world queue the native drain timer reads. Capture phase so an event is
+// seen even if a handler stops propagation. __aurelian_events_init lets a
+// subscriber confirm the tap is live before dispatching.
+constexpr char kInstallEventTapJs[] = R"JS(
+(function(){
+  if (window.__aurelian_events_init) return true;
+  window.__aurelian_events_init = true;
+  window.__aurelian_events_queue = [];
+  var types = ['click','dblclick','mousedown','mouseup','keydown','keyup',
+               'input','change','submit','focus','blur','scroll'];
+  types.forEach(function(ty){
+    document.addEventListener(ty, function(e){
+      try {
+        var t = e.target;
+        var label = (t && t.id) ? '#'+t.id
+                  : (t && t.nodeName ? t.nodeName : 'unknown');
+        window.__aurelian_events_queue.push(
+            JSON.stringify({type:e.type, target:label}));
+      } catch(err){}
+    }, true);
+  });
+  return true;
+})()
+)JS";
+
 void AurelianRenderFrameObserver::Subscribe(
     const std::vector<uint8_t>& envelope,
     SubscribeCallback callback) {
@@ -239,6 +266,8 @@ void AurelianRenderFrameObserver::Subscribe(
     EvalString(kInstallMutationObserverJs);
   } else if (stream == "console") {
     EvalString(kInstallConsoleInterceptorJs);
+  } else if (stream == "events") {
+    EvalString(kInstallEventTapJs);
   }
 
   std::move(callback).Run(std::move(receiver));
@@ -265,6 +294,11 @@ void AurelianRenderFrameObserver::Subscribe(
     raw->timer.Start(
         FROM_HERE, base::Milliseconds(50),
         base::BindRepeating(&AurelianRenderFrameObserver::DrainConsoleFrames,
+                            weak_factory_.GetWeakPtr(), raw));
+  } else if (stream == "events") {
+    raw->timer.Start(
+        FROM_HERE, base::Milliseconds(50),
+        base::BindRepeating(&AurelianRenderFrameObserver::DrainEventFrames,
                             weak_factory_.GetWeakPtr(), raw));
   }
 
@@ -317,6 +351,14 @@ void AurelianRenderFrameObserver::DrainConsoleFrames(RendererStream* stream) {
   EmitJoinedFrames(stream, EvalString(
       "(window.__aurelian_console_queue?"
       "window.__aurelian_console_queue.splice(0).join(String.fromCharCode(1))"
+      ":'')"));
+}
+
+void AurelianRenderFrameObserver::DrainEventFrames(RendererStream* stream) {
+  // Pull and clear the queued {type,target} JSON frames (separated by \x01).
+  EmitJoinedFrames(stream, EvalString(
+      "(window.__aurelian_events_queue?"
+      "window.__aurelian_events_queue.splice(0).join(String.fromCharCode(1))"
       ":'')"));
 }
 

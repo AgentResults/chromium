@@ -226,4 +226,49 @@ IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, ReceivesConsole) {
   EXPECT_TRUE(found_warn) << "expected a warn-level frame carrying the message";
 }
 
+// C6.e — the renderer /events producer (DOM event tap) delivers a frame per
+// dispatched DOM event over Mojo, carrying the type + target.
+IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, ReceivesEvents) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<body><button id='b'>x</button></body>")));
+
+  mojo::AssociatedRemote<mojom::AurelianWire> wire;
+  GetWire(&wire);
+
+  std::vector<std::string> frames;
+  MojoStreamBridge bridge(base::BindRepeating(
+      [](std::vector<std::string>* f, const std::vector<uint8_t>& bytes) {
+        f->emplace_back(bytes.begin(), bytes.end());
+      },
+      &frames));
+  bridge.Subscribe(wire, "events");
+
+  // Wait until the renderer has installed the event tap (it does so in
+  // Subscribe, before replying), so the click below cannot race it.
+  EXPECT_EQ(true,
+            content::EvalJs(
+                GetWC(),
+                "(async()=>{for(let i=0;i<200;i++){"
+                "if(window.__aurelian_events_init)return true;"
+                "await new Promise(r=>setTimeout(r,10));}return false;})()")
+                .ExtractBool());
+
+  // Fire a click on the button.
+  ASSERT_TRUE(content::ExecJs(GetWC(), "document.getElementById('b').click();"));
+
+  PumpUntil(base::BindLambdaForTesting([&]() { return !frames.empty(); }),
+            base::Seconds(10));
+  ASSERT_FALSE(frames.empty()) << "no event frames arrived";
+
+  bool found_click = false;
+  for (const auto& f : frames) {
+    if (f.find("\"click\"") != std::string::npos &&
+        f.find("#b") != std::string::npos) {
+      found_click = true;
+    }
+  }
+  EXPECT_TRUE(found_click) << "expected a click frame targeting #b";
+}
+
 }  // namespace aurelian

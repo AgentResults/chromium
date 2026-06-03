@@ -6,8 +6,11 @@
 
 #include <mutex>
 
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "content/public/browser/browser_context.h"
@@ -57,6 +60,78 @@ std::vector<ObservedRequest>& ObsStore() {
   return *store;
 }
 
+// --- Request stream subscriber registry (thread-safe) ---
+// Lives on the subscriber's delivery sequence; the throttle (any thread) posts
+// frames to that sequence. A WeakPtr receiver makes cancel race-free: once the
+// subscription (hence the sink) is destroyed, any already-posted frame no-ops.
+class RequestSink {
+ public:
+  explicit RequestSink(RequestFrameCallback cb) : cb_(std::move(cb)) {}
+  void Deliver(const ObservedRequest& r) { cb_.Run(r); }
+  base::WeakPtr<RequestSink> GetWeak() { return weak_factory_.GetWeakPtr(); }
+
+ private:
+  RequestFrameCallback cb_;
+  base::WeakPtrFactory<RequestSink> weak_factory_{this};
+};
+
+struct SubEntry {
+  int id;
+  scoped_refptr<base::SequencedTaskRunner> runner;
+  base::WeakPtr<RequestSink> sink;
+};
+
+std::mutex& SubMutex() {
+  static auto* mu = new std::mutex();
+  return *mu;
+}
+
+std::vector<SubEntry>& SubStore() {
+  static auto* store = new std::vector<SubEntry>();
+  return *store;
+}
+
+int next_sub_id = 1;
+
+// Fan a freshly observed request out to every active subscriber, each on its
+// own delivery sequence. Safe to call from any thread (e.g. the throttle).
+void BroadcastRequest(const ObservedRequest& obs) {
+  std::lock_guard<std::mutex> lock(SubMutex());
+  for (const auto& entry : SubStore()) {
+    entry.runner->PostTask(
+        FROM_HERE, base::BindOnce(&RequestSink::Deliver, entry.sink, obs));
+  }
+}
+
+class RequestSubscriptionImpl : public RequestSubscription {
+ public:
+  explicit RequestSubscriptionImpl(RequestFrameCallback cb)
+      : sink_(std::make_unique<RequestSink>(std::move(cb))) {
+    std::lock_guard<std::mutex> lock(SubMutex());
+    id_ = next_sub_id++;
+    SubStore().push_back(
+        {id_, base::SequencedTaskRunner::GetCurrentDefault(),
+         sink_->GetWeak()});
+  }
+
+  ~RequestSubscriptionImpl() override {
+    std::lock_guard<std::mutex> lock(SubMutex());
+    auto& store = SubStore();
+    for (auto it = store.begin(); it != store.end(); ++it) {
+      if (it->id == id_) {
+        store.erase(it);
+        break;
+      }
+    }
+    // sink_ is destroyed after the lock releases; its WeakPtrs invalidate, so
+    // any frame already posted to the delivery sequence no-ops.
+  }
+
+ private:
+  int id_ = 0;
+  std::unique_ptr<RequestSink> sink_;
+};
+
 // The Aurelian URLLoaderThrottle — applies intercept rules + observes.
 class AurelianURLThrottle : public blink::URLLoaderThrottle {
  public:
@@ -67,14 +142,15 @@ class AurelianURLThrottle : public blink::URLLoaderThrottle {
                         bool* defer) override {
     std::string url = request->url.spec();
 
-    // Log the request for observation.
+    // Log the request for observation, then stream it to subscribers.
+    ObservedRequest obs;
+    obs.url = url;
+    obs.method = request->method;
     {
       std::lock_guard<std::mutex> lock(ObsMutex());
-      ObservedRequest obs;
-      obs.url = url;
-      obs.method = request->method;
-      ObsStore().push_back(std::move(obs));
+      ObsStore().push_back(obs);
     }
+    BroadcastRequest(obs);
 
     std::lock_guard<std::mutex> lock(RuleMutex());
     for (const auto& rule : RuleStore()) {
@@ -149,6 +225,11 @@ std::vector<ObservedRequest> GetObservedRequests() {
 void ClearObservedRequests() {
   std::lock_guard<std::mutex> lock(ObsMutex());
   ObsStore().clear();
+}
+
+std::unique_ptr<RequestSubscription> SubscribeRequests(
+    RequestFrameCallback cb) {
+  return std::make_unique<RequestSubscriptionImpl>(std::move(cb));
 }
 
 // --- Cookie API (UI thread, synchronous via RunLoop) ---
