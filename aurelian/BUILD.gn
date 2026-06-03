@@ -222,6 +222,30 @@ if (enable_aurelian) {
     ]
   }
 
+  # C10: existing asmodeus CredentialStore routed through a Velite handle.
+  # RTTI (Velite handle code).
+  source_set("aurelian_credentials") {
+    sources = [
+      "handles/profile/credentials_handle.cc",
+      "handles/profile/credentials_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser/asmodeus:asmodeus_automation_core",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # Velite handle code — compiled with RTTI.
   source_set("aurelian_handles") {
     sources = [
@@ -293,15 +317,18 @@ if (enable_aurelian) {
       "capability/cap_chain_unittest.cc",
       "capability/cap_membrane_unittest.cc",
       "capability/cap_predicate_unittest.cc",
+      "handles/profile/credentials_handle_unittest.cc",
       "handles/streams/subscription_producer_unittest.cc",
     ]
 
     deps = [
       ":aurelian_capability",
+      ":aurelian_credentials",
       ":aurelian_streams",
       "//base",
       "//base/test:run_all_unittests",
       "//base/test:test_support",
+      "//chrome/browser/asmodeus:asmodeus_automation_core",
       "//testing/gtest",
       "//velite",
     ]
