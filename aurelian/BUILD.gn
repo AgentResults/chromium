@@ -68,6 +68,31 @@ if (enable_aurelian) {
     ]
   }
 
+  # Find-in-page observer glue. Kept in a SEPARATE no-RTTI source_set: it
+  # subclasses find_in_page::FindResultObserver (-> base::CheckedObserver),
+  # whose typeinfo is not emitted in Chromium's no-RTTI build. Subclassing it
+  # from the RTTI-compiled aurelian_handles TU would leave an undefined
+  # "typeinfo for base::CheckedObserver" at link time, so the observer lives
+  # here and the handle code talks to it through the plain find_glue.h API.
+  source_set("aurelian_find_glue") {
+    sources = [
+      "handles/browser/find_glue.cc",
+      "handles/browser/find_glue.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/find_in_page",
+      "//content/public/browser",
+      "//ui/gfx/geometry",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Velite handle code — compiled with RTTI.
   source_set("aurelian_handles") {
     sources = [
@@ -76,6 +101,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_find_glue",
       "//aurelian/public/mojom",
       "//base",
       "//components/input",
@@ -135,6 +161,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "handles/browser/find_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",

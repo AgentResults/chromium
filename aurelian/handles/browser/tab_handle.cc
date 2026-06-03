@@ -4,6 +4,8 @@
 
 #include "aurelian/handles/browser/tab_handle.h"
 
+#include "aurelian/handles/browser/find_glue.h"
+
 #include <cctype>
 #include <map>
 #include <optional>
@@ -875,6 +877,119 @@ class AurelianPrintHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// FindHandle — find-in-page over the no-RTTI find_glue (C5.d).
+// ---------------------------------------------------------------------------
+
+// Builds the result object from the RTTI-free FindResultData.
+V MakeFindResult(const FindResultData& d) {
+  return V::make_object({
+      {"matchCount", V(static_cast<int64_t>(d.match_count))},
+      {"currentMatch", V(static_cast<int64_t>(d.current_match))},
+      {"selectionRect", V::make_object({
+                            {"x", V(static_cast<int64_t>(d.x))},
+                            {"y", V(static_cast<int64_t>(d.y))},
+                            {"width", V(static_cast<int64_t>(d.width))},
+                            {"height", V(static_cast<int64_t>(d.height))},
+                        })},
+  });
+}
+
+class AurelianFindHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianFindHandle> make(
+      base::WeakPtr<content::WebContents> wc,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianFindHandle>(
+        new AurelianFindHandle(std::move(wc), tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& spec) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+    if (msg == "find") {
+      const V* q = spec.object_get("query");
+      if (q && q->is_string()) query_ = q->as_string();
+      if (query_.empty()) return VH::make_broken("no-query");
+      const V* cs = spec.object_get("caseSensitive");
+      case_sensitive_ = cs && cs->is_bool() && cs->as_bool();
+      return StartFind(/*forward=*/true);
+    }
+    if (msg == "findNext") {
+      if (query_.empty()) return VH::make_broken("no-query");
+      return StartFind(/*forward=*/true);
+    }
+    if (msg == "findPrev") {
+      if (query_.empty()) return VH::make_broken("no-query");
+      return StartFind(/*forward=*/false);
+    }
+    if (msg == "result") {
+      auto* wc = wc_.get();
+      if (!wc) return VH::make_broken("gone");
+      FindResultData data;
+      if (!CurrentFindResult(wc, &data)) return VH::make_broken("no-find");
+      return VH::make(MakeFindResult(data));
+    }
+    return VH::make_broken("not-callable");
+  }
+
+  void tell(std::string_view msg, const V& /*data*/) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    auto* wc = wc_.get();
+    if (!wc) return;
+    if (msg == "findNext" && !query_.empty()) {
+      FindStep(wc, base::UTF8ToUTF16(query_), /*forward=*/true, case_sensitive_);
+    } else if (msg == "findPrev" && !query_.empty()) {
+      FindStep(wc, base::UTF8ToUTF16(query_), /*forward=*/false,
+               case_sensitive_);
+    } else if (msg == "stop") {
+      StopFind(wc);
+    }
+  }
+
+ private:
+  AurelianFindHandle(base::WeakPtr<content::WebContents> wc, int64_t tab_id)
+      : wc_(std::move(wc)),
+        uri_("legion://chrome/browser/tabs/" + base::NumberToString(tab_id) +
+             "/find"),
+        value_(uri_) {}
+
+  std::shared_ptr<Handle> StartFind(bool forward) {
+    auto* wc = wc_.get();
+    if (!wc) return VH::make_broken("gone");
+
+    auto pending = PendingValueHandle::make();
+    std::weak_ptr<PendingValueHandle> weak = pending;
+    StartFindAndObserve(
+        wc, base::UTF8ToUTF16(query_), forward, case_sensitive_,
+        base::BindOnce(
+            [](std::weak_ptr<PendingValueHandle> weak, FindResultData d) {
+              auto h = weak.lock();
+              if (!h) return;
+              if (!d.ok) {
+                h->Break("gone");
+              } else {
+                h->Resolve(MakeFindResult(d));
+              }
+            },
+            std::move(weak)));
+    return pending;
+  }
+
+  base::WeakPtr<content::WebContents> wc_;
+  std::string uri_;
+  V value_;
+  std::string query_;
+  bool case_sensitive_ = false;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -912,6 +1027,8 @@ class AurelianTabHandle : public Handle {
       return AurelianScreenshotHandle::make(wc_, tab_id_);
     if (msg == "print")
       return AurelianPrintHandle::make(wc_, tab_id_);
+    if (msg == "find")
+      return AurelianFindHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},
