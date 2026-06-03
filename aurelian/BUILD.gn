@@ -87,6 +87,26 @@ if (enable_aurelian) {
     ]
   }
 
+  # Extensions list / enable / disable (C7.b). No RTTI.
+  source_set("aurelian_extensions") {
+    sources = [
+      "handles/browser/extensions_handle.cc",
+      "handles/browser/extensions_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//extensions/browser",
+      "//extensions/common",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Find-in-page observer glue. Kept in a SEPARATE no-RTTI source_set: it
   # subclasses find_in_page::FindResultObserver (-> base::CheckedObserver),
   # whose typeinfo is not emitted in Chromium's no-RTTI build. Subclassing it
@@ -229,6 +249,7 @@ if (enable_aurelian) {
     sources = [
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
+      "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
@@ -245,6 +266,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_a11y",
+      ":aurelian_extensions",
       ":aurelian_handles",
       ":aurelian_network",
       ":aurelian_streams",
@@ -258,6 +280,8 @@ if (enable_aurelian) {
       "//components/download/public/common:public",
       "//content/public/browser",
       "//content/test:test_support",
+      "//extensions/browser",
+      "//extensions/common",
       "//mojo/public/cpp/bindings",
       "//net",
       "//net:test_support",
