@@ -107,6 +107,26 @@ if (enable_aurelian) {
     ]
   }
 
+  # Permissions query / grant / revoke via content settings (C7.c). No RTTI.
+  source_set("aurelian_permissions") {
+    sources = [
+      "handles/browser/permissions_handle.cc",
+      "handles/browser/permissions_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/content_settings/core/browser",
+      "//components/content_settings/core/common",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Find-in-page observer glue. Kept in a SEPARATE no-RTTI source_set: it
   # subclasses find_in_page::FindResultObserver (-> base::CheckedObserver),
   # whose typeinfo is not emitted in Chromium's no-RTTI build. Subclassing it
@@ -251,6 +271,7 @@ if (enable_aurelian) {
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
+      "handles/browser/permissions_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",
@@ -269,6 +290,7 @@ if (enable_aurelian) {
       ":aurelian_extensions",
       ":aurelian_handles",
       ":aurelian_network",
+      ":aurelian_permissions",
       ":aurelian_streams",
       "//aurelian/public/mojom",
       "//base",
@@ -277,6 +299,7 @@ if (enable_aurelian) {
       "//chrome/browser/ui",
       "//chrome/test:browser_tests_runner",
       "//chrome/test:test_support",
+      "//components/content_settings/core/browser",
       "//components/download/public/common:public",
       "//content/public/browser",
       "//content/test:test_support",
