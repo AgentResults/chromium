@@ -4,6 +4,7 @@
 
 #include "aurelian/handles/browser/tab_handle.h"
 
+#include <cctype>
 #include <map>
 #include <string>
 
@@ -13,13 +14,27 @@
 #include "content/public/browser/global_routing_id.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/input/web_gesture_device.h"
+#include "third_party/blink/public/common/input/web_gesture_event.h"
+#include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
+#include "ui/events/base_event_utils.h"
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/dom/dom_key.h"
+#include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
 #include "velite/agentspaces-wire/agentspace.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -299,6 +314,299 @@ class AurelianFrameHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// Input synthesis helpers (C5.a) — read spec fields, map keys, build events.
+// ---------------------------------------------------------------------------
+double NumField(const V& spec, const char* key, double dflt) {
+  const V* v = spec.object_get(key);
+  if (!v) return dflt;
+  if (v->is_int()) return static_cast<double>(v->as_int());
+  if (v->is_double()) return v->as_double();
+  return dflt;
+}
+
+std::string StrField(const V& spec, const char* key, const std::string& dflt) {
+  const V* v = spec.object_get(key);
+  return (v && v->is_string()) ? v->as_string() : dflt;
+}
+
+int ModifiersField(const V& spec) {
+  const V* v = spec.object_get("modifiers");
+  return (v && v->is_int()) ? static_cast<int>(v->as_int()) : 0;
+}
+
+// Map a key name / single printable char to (DomKey, DomCode, KeyboardCode).
+// The Char event carries the literal character in its text field, so text
+// insertion is correct even when the keycode is only approximate.
+void MapKey(const std::string& key,
+            ui::DomKey* dk,
+            ui::DomCode* dc,
+            ui::KeyboardCode* kc) {
+  if (key.size() == 1) {
+    unsigned char c = static_cast<unsigned char>(key[0]);
+    *dk = ui::DomKey::FromCharacter(c);
+    unsigned char u = static_cast<unsigned char>(std::toupper(c));
+    if (u >= 'A' && u <= 'Z') {
+      *kc = static_cast<ui::KeyboardCode>(ui::VKEY_A + (u - 'A'));
+    } else if (c >= '0' && c <= '9') {
+      *kc = static_cast<ui::KeyboardCode>(ui::VKEY_0 + (c - '0'));
+    } else if (c == ' ') {
+      *kc = ui::VKEY_SPACE;
+    } else {
+      *kc = ui::VKEY_UNKNOWN;
+    }
+    *dc = ui::UsLayoutKeyboardCodeToDomCode(*kc);
+    return;
+  }
+  if (key == "Enter") {
+    *dk = ui::DomKey::ENTER;
+    *kc = ui::VKEY_RETURN;
+  } else if (key == "Tab") {
+    *dk = ui::DomKey::TAB;
+    *kc = ui::VKEY_TAB;
+  } else if (key == "Backspace") {
+    *dk = ui::DomKey::BACKSPACE;
+    *kc = ui::VKEY_BACK;
+  } else if (key == "Escape") {
+    *dk = ui::DomKey::ESCAPE;
+    *kc = ui::VKEY_ESCAPE;
+  } else if (key == "ArrowLeft") {
+    *dk = ui::DomKey::ARROW_LEFT;
+    *kc = ui::VKEY_LEFT;
+  } else if (key == "ArrowRight") {
+    *dk = ui::DomKey::ARROW_RIGHT;
+    *kc = ui::VKEY_RIGHT;
+  } else if (key == "ArrowUp") {
+    *dk = ui::DomKey::ARROW_UP;
+    *kc = ui::VKEY_UP;
+  } else if (key == "ArrowDown") {
+    *dk = ui::DomKey::ARROW_DOWN;
+    *kc = ui::VKEY_DOWN;
+  } else {
+    *dk = ui::DomKey::FromCharacter('?');
+    *kc = ui::VKEY_UNKNOWN;
+  }
+  *dc = ui::UsLayoutKeyboardCodeToDomCode(*kc);
+}
+
+// Replicates content's BuildSimpleWebKeyEvent for production use.
+void FillKeyEvent(input::NativeWebKeyboardEvent* event,
+                  blink::WebInputEvent::Type type,
+                  ui::DomKey dk,
+                  ui::DomCode dc,
+                  ui::KeyboardCode kc) {
+  event->dom_key = dk;
+  event->dom_code = static_cast<int>(dc);
+  event->native_key_code = ui::KeycodeConverter::DomCodeToNativeKeycode(dc);
+  event->windows_key_code = kc;
+  event->is_system_key = false;
+  event->skip_if_unhandled = true;
+  if (type == blink::WebInputEvent::Type::kChar ||
+      type == blink::WebInputEvent::Type::kRawKeyDown) {
+    if (dk.IsCharacter()) {
+      event->text[0] = dk.ToCharacter();
+      event->unmodified_text[0] = dk.ToCharacter();
+    } else {
+      event->text[0] = kc;
+      event->unmodified_text[0] = kc;
+    }
+  }
+}
+
+void SendKeyEvent(content::RenderWidgetHost* rwh,
+                  blink::WebInputEvent::Type type,
+                  ui::DomKey dk,
+                  ui::DomCode dc,
+                  ui::KeyboardCode kc,
+                  int modifiers) {
+  input::NativeWebKeyboardEvent event(type, modifiers, ui::EventTimeForNow());
+  FillKeyEvent(&event, type, dk, dc, kc);
+  rwh->ForwardKeyboardEvent(event);
+}
+
+// ---------------------------------------------------------------------------
+// InputHandle — synthesizes hardware-level input on a WebContents'
+// RenderWidgetHost (mouse/key/text/wheel/touch). All verbs are tells.
+// (IME composition is renderer-interior; deferred — see tell() below.)
+// ---------------------------------------------------------------------------
+class AurelianInputHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianInputHandle> make(
+      base::WeakPtr<content::WebContents> wc,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianInputHandle>(
+        new AurelianInputHandle(std::move(wc), tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& /*spec*/) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+    return VH::make_broken("not-callable");
+  }
+
+  void tell(std::string_view msg, const V& data) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    auto* wc = wc_.get();
+    if (!wc) return;
+    auto* rfh = wc->GetPrimaryMainFrame();
+    if (!rfh) return;
+    auto* rwh = rfh->GetRenderWidgetHost();
+    if (!rwh) return;
+
+    if (msg == "mouse") {
+      DoMouse(rwh, wc, data);
+    } else if (msg == "key") {
+      DoKey(rwh, data);
+    } else if (msg == "text") {
+      DoText(rwh, data);
+    } else if (msg == "wheel") {
+      DoWheel(rwh, data);
+    } else if (msg == "touch") {
+      DoTouch(rwh, data);
+    }
+    // NOTE: "ime" (composition preview + commit) is intentionally NOT
+    // handled here. IME composition is a renderer-interior operation
+    // (blink::WebFrameWidget / RenderWidget ImeSetComposition +
+    // ImeCommitText), reached over the Mojo bridge from a renderer-side
+    // input path — not the browser-process RenderWidgetHost. It is
+    // deferred to that renderer handle rather than faked as text entry.
+  }
+
+ private:
+  AurelianInputHandle(base::WeakPtr<content::WebContents> wc, int64_t tab_id)
+      : wc_(std::move(wc)),
+        uri_("legion://chrome/browser/tabs/" + base::NumberToString(tab_id) +
+             "/input"),
+        value_(uri_) {}
+
+  void DoMouse(content::RenderWidgetHost* rwh,
+               content::WebContents* wc,
+               const V& data) {
+    std::string type = StrField(data, "type", "click");
+    std::string button = StrField(data, "button", "left");
+    double x = NumField(data, "x", 0);
+    double y = NumField(data, "y", 0);
+    int modifiers = ModifiersField(data);
+
+    auto build = [&](blink::WebInputEvent::Type t) {
+      blink::WebMouseEvent e(t, modifiers, ui::EventTimeForNow());
+      if (t == blink::WebInputEvent::Type::kMouseMove) {
+        e.button = blink::WebMouseEvent::Button::kNoButton;
+      } else if (button == "right") {
+        e.button = blink::WebMouseEvent::Button::kRight;
+      } else if (button == "middle") {
+        e.button = blink::WebMouseEvent::Button::kMiddle;
+      } else {
+        e.button = blink::WebMouseEvent::Button::kLeft;
+      }
+      e.SetPositionInWidget(x, y);
+      gfx::Rect offset = wc->GetContainerBounds();
+      e.SetPositionInScreen(x + offset.x(), y + offset.y());
+      e.click_count = 1;
+      return e;
+    };
+
+    if (type == "move") {
+      rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseMove));
+    } else if (type == "down") {
+      rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseDown));
+    } else if (type == "up") {
+      rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseUp));
+    } else {  // "click" — down + up
+      rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseDown));
+      rwh->ForwardMouseEvent(build(blink::WebInputEvent::Type::kMouseUp));
+    }
+  }
+
+  void DoKey(content::RenderWidgetHost* rwh, const V& data) {
+    std::string type = StrField(data, "type", "press");
+    std::string key = StrField(data, "key", "");
+    if (key.empty()) return;
+    int modifiers = ModifiersField(data);
+    ui::DomKey dk;
+    ui::DomCode dc;
+    ui::KeyboardCode kc;
+    MapKey(key, &dk, &dc, &kc);
+    if (type == "down") {
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kRawKeyDown, dk, dc, kc,
+                   modifiers);
+    } else if (type == "up") {
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kKeyUp, dk, dc, kc,
+                   modifiers);
+    } else {  // "press" — down + char + up
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kRawKeyDown, dk, dc, kc,
+                   modifiers);
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kChar, dk, dc, kc,
+                   modifiers);
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kKeyUp, dk, dc, kc,
+                   modifiers);
+    }
+  }
+
+  void DoText(content::RenderWidgetHost* rwh, const V& data) {
+    std::string text = StrField(data, "text", "");
+    for (char c : text) {
+      std::string key(1, c);
+      ui::DomKey dk;
+      ui::DomCode dc;
+      ui::KeyboardCode kc;
+      MapKey(key, &dk, &dc, &kc);
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kRawKeyDown, dk, dc, kc, 0);
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kChar, dk, dc, kc, 0);
+      SendKeyEvent(rwh, blink::WebInputEvent::Type::kKeyUp, dk, dc, kc, 0);
+    }
+  }
+
+  void DoWheel(content::RenderWidgetHost* rwh, const V& data) {
+    double x = NumField(data, "x", 0);
+    double y = NumField(data, "y", 0);
+    double dx = NumField(data, "deltaX", 0);
+    double dy = NumField(data, "deltaY", 0);
+    int modifiers = ModifiersField(data);
+    blink::WebMouseWheelEvent e(blink::WebInputEvent::Type::kMouseWheel,
+                                modifiers, ui::EventTimeForNow());
+    e.SetPositionInWidget(x, y);
+    e.delta_x = dx;
+    e.delta_y = dy;
+    e.phase = blink::WebMouseWheelEvent::kPhaseBegan;
+    rwh->ForwardWheelEvent(e);
+  }
+
+  void DoTouch(content::RenderWidgetHost* rwh, const V& data) {
+    double x = NumField(data, "x", 0);
+    double y = NumField(data, "y", 0);
+    // Hardware-level touchscreen gesture: TapDown then Tap, which the
+    // renderer turns into pointer/click events on the page.
+    blink::WebGestureEvent down(blink::WebInputEvent::Type::kGestureTapDown, 0,
+                                ui::EventTimeForNow(),
+                                blink::WebGestureDevice::kTouchscreen);
+    down.SetPositionInWidget(gfx::PointF(x, y));
+    down.data.tap_down.width = 1;
+    down.data.tap_down.height = 1;
+    rwh->ForwardGestureEvent(down);
+
+    blink::WebGestureEvent tap(blink::WebInputEvent::Type::kGestureTap, 0,
+                               ui::EventTimeForNow(),
+                               blink::WebGestureDevice::kTouchscreen);
+    tap.SetPositionInWidget(gfx::PointF(x, y));
+    tap.data.tap.tap_count = 1;
+    tap.data.tap.width = 1;
+    tap.data.tap.height = 1;
+    rwh->ForwardGestureEvent(tap);
+  }
+
+  base::WeakPtr<content::WebContents> wc_;
+  std::string uri_;
+  V value_;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -330,6 +638,8 @@ class AurelianTabHandle : public Handle {
       return VH::make(V(wc->IsLoading()));
     if (msg == "navigation")
       return AurelianNavigationHandle::make(wc_, tab_id_);
+    if (msg == "input")
+      return AurelianInputHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},

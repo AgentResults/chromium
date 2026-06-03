@@ -78,10 +78,14 @@ if (enable_aurelian) {
     deps = [
       "//aurelian/public/mojom",
       "//base",
+      "//components/input",
       "//content/public/browser",
       "//mojo/public/cpp/bindings",
       "//third_party/blink/public/common",
       "//ui/base",
+      "//ui/events:dom_keycode_converter",
+      "//ui/events:events_base",
+      "//ui/gfx/geometry",
       "//url",
       "//velite",
     ]
@@ -125,6 +129,7 @@ if (enable_aurelian) {
   test("aurelian_browsertests") {
     sources = [
       "handles/browser/frame_handle_browsertest.cc",
+      "handles/browser/input_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
