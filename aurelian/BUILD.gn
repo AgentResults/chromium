@@ -162,6 +162,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",

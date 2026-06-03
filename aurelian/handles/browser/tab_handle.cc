@@ -1058,6 +1058,64 @@ class AurelianZoomHandle : public Handle {
 };
 
 // ---------------------------------------------------------------------------
+// AudioHandle — tab audio mute + audibility (C5.f).
+// ---------------------------------------------------------------------------
+class AurelianAudioHandle : public Handle {
+ public:
+  static std::shared_ptr<AurelianAudioHandle> make(
+      base::WeakPtr<content::WebContents> wc,
+      int64_t tab_id) {
+    return std::shared_ptr<AurelianAudioHandle>(
+        new AurelianAudioHandle(std::move(wc), tab_id));
+  }
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const V& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return uri_; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const V& /*spec*/) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (msg == "__getIdentity") return VH::make(V(uri_));
+    // Confirming actual speaker output is silent needs a human in the room;
+    // refused outside an operator-present session (operator-presence SIT).
+    if (msg == "verifySpeakerSilence")
+      return VH::make_broken("requires-operator-presence");
+
+    auto* wc = wc_.get();
+    if (!wc) return VH::make_broken("gone");
+    if (msg == "isMuted") return VH::make(V(wc->IsAudioMuted()));
+    if (msg == "isAudible") return VH::make(V(wc->IsCurrentlyAudible()));
+    if (msg == "wasEverAudible") return VH::make(V(wc->WasEverAudible()));
+    if (msg == "isCapturing") return VH::make(V(wc->IsBeingCaptured()));
+    return VH::make_broken("not-callable");
+  }
+
+  void tell(std::string_view msg, const V& data) override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    auto* wc = wc_.get();
+    if (!wc) return;
+    if (msg == "mute") {
+      const V* muted = data.object_get("muted");
+      wc->SetAudioMuted(muted && muted->is_bool() ? muted->as_bool() : true);
+    }
+  }
+
+ private:
+  AurelianAudioHandle(base::WeakPtr<content::WebContents> wc, int64_t tab_id)
+      : wc_(std::move(wc)),
+        uri_("legion://chrome/browser/tabs/" + base::NumberToString(tab_id) +
+             "/audio"),
+        value_(uri_) {}
+
+  base::WeakPtr<content::WebContents> wc_;
+  std::string uri_;
+  V value_;
+};
+
+// ---------------------------------------------------------------------------
 // TabHandle — bound to a WebContents
 // ---------------------------------------------------------------------------
 class AurelianTabHandle : public Handle {
@@ -1099,6 +1157,8 @@ class AurelianTabHandle : public Handle {
       return AurelianFindHandle::make(wc_, tab_id_);
     if (msg == "zoom")
       return AurelianZoomHandle::make(wc_, tab_id_);
+    if (msg == "audio")
+      return AurelianAudioHandle::make(wc_, tab_id_);
     if (msg == "describe") {
       return VH::make(V::make_object({
           {"uri", V(uri_)},
