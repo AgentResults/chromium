@@ -93,6 +93,27 @@ if (enable_aurelian) {
     ]
   }
 
+  # Subscription stream producer (C6). No RTTI (no dynamic_cast here; uses
+  # Velite's SubscriptionHandle, whose typeinfo is provided by //velite).
+  source_set("aurelian_streams") {
+    sources = [
+      "handles/streams/subscription_producer.cc",
+      "handles/streams/subscription_producer.h",
+    ]
+
+    deps = [
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Velite handle code — compiled with RTTI.
   source_set("aurelian_handles") {
     sources = [
@@ -147,6 +168,27 @@ if (enable_aurelian) {
       "//chrome/browser:main_extra_parts",
       "//chrome/browser/ui",
       "//content/public/browser",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # Unit tests — pure in-process substrate/handle logic (no browser).
+  test("aurelian_unittests") {
+    sources = [ "handles/streams/subscription_producer_unittest.cc" ]
+
+    deps = [
+      ":aurelian_streams",
+      "//base",
+      "//base/test:run_all_unittests",
+      "//base/test:test_support",
+      "//testing/gtest",
       "//velite",
     ]
 
