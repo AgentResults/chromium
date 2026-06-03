@@ -10,10 +10,14 @@
 #include <string>
 #include <vector>
 
+#include "aurelian/capability/cap_chain.h"
+#include "aurelian/capability/cap_predicate.h"
+#include "aurelian/capability/cap_wire.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "content/public/renderer/render_frame.h"
@@ -145,7 +149,16 @@ void AurelianRenderFrameObserver::BindAurelianWire(
 void AurelianRenderFrameObserver::Dispatch(
     const std::vector<uint8_t>& envelope,
     DispatchCallback callback) {
-  std::string msg(envelope.begin(), envelope.end());
+  // An envelope may carry a cap (C8). The cap is verified + enforced HERE, in
+  // the renderer membrane — the browser hub does not get to vouch.
+  bool has_cap = false;
+  std::vector<CapLink> chain;
+  std::string msg;
+  if (!DecodeEnvelope(envelope, &has_cap, &chain, &msg)) {
+    std::string err = "{\"error\":\"cap-chain-invalid\"}";
+    std::move(callback).Run(std::vector<uint8_t>(err.begin(), err.end()));
+    return;
+  }
 
   std::string verb, param;
   auto tab_pos = msg.find('\t');
@@ -156,9 +169,67 @@ void AurelianRenderFrameObserver::Dispatch(
     verb = msg;
   }
 
+  if (has_cap) {
+    std::string denied = CheckCap(chain, verb, param);
+    if (!denied.empty()) {
+      std::move(callback).Run(
+          std::vector<uint8_t>(denied.begin(), denied.end()));
+      return;
+    }
+  }
+
   std::string reply_str = DispatchVerb(verb, param);
   std::vector<uint8_t> reply(reply_str.begin(), reply_str.end());
   std::move(callback).Run(reply);
+}
+
+void AurelianRenderFrameObserver::SetTrustAnchor(
+    const std::vector<uint8_t>& anchor_pub) {
+  if (anchor_pub.size() != trusted_anchor_.size()) {
+    has_anchor_ = false;
+    return;
+  }
+  std::copy(anchor_pub.begin(), anchor_pub.end(), trusted_anchor_.begin());
+  has_anchor_ = true;
+}
+
+namespace {
+
+// Verbs that mutate the page (a mode=read cap must deny these).
+bool IsMutatingVerb(const std::string& verb) {
+  return verb == "dom.node.setAttribute" || verb == "dom.node.setText" ||
+         verb == "dom.node.click" || verb == "dom.node.focus" ||
+         verb == "dom.node.remove" || verb == "dom.node.forget" ||
+         verb == "js.eval";
+}
+
+}  // namespace
+
+std::string AurelianRenderFrameObserver::CheckCap(
+    const std::vector<CapLink>& chain,
+    const std::string& verb,
+    const std::string& target) {
+  // No anchor provisioned → nothing is trusted (the renderer cannot vouch for
+  // itself). This is the post-bootstrap enforcing state.
+  if (!has_anchor_) {
+    return "{\"error\":\"cap-untrusted-anchor\"}";
+  }
+  int64_t now = base::Time::Now().ToTimeT();
+
+  // 1. Verify the WHOLE chain back to this membrane's anchor.
+  ChainVerifyResult chain_result =
+      VerifyChain(chain, trusted_anchor_, now, /*revoked=*/{});
+  if (!chain_result.ok) {
+    return "{\"error\":\"" + chain_result.reason + "\"}";
+  }
+
+  // 2. Enforce the effective (most-attenuated) predicate against this op.
+  std::string reason;
+  if (!chain_result.effective.Allows(verb, IsMutatingVerb(verb), target, now,
+                                     &reason)) {
+    return "{\"error\":\"" + reason + "\"}";
+  }
+  return std::string();
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,13 @@
 
 namespace aurelian {
 
+CapPredicate::CapPredicate() = default;
+CapPredicate::~CapPredicate() = default;
+CapPredicate::CapPredicate(const CapPredicate&) = default;
+CapPredicate& CapPredicate::operator=(const CapPredicate&) = default;
+CapPredicate::CapPredicate(CapPredicate&&) = default;
+CapPredicate& CapPredicate::operator=(CapPredicate&&) = default;
+
 namespace {
 
 bool Contains(const std::vector<std::string>& v, const std::string& x) {

@@ -28,6 +28,13 @@ using Signature = std::array<uint8_t, 64>;
 // the link); `subject_pub` is the membrane the cap is granted to. The root
 // link's issuer is the operator trust anchor.
 struct CapLink {
+  CapLink();
+  ~CapLink();
+  CapLink(const CapLink&);
+  CapLink& operator=(const CapLink&);
+  CapLink(CapLink&&);
+  CapLink& operator=(CapLink&&);
+
   std::string cap_id;
   std::string parent_cap_id;  // empty for the root link
   std::string predicate;      // bracketed predicate body (see CapPredicate)
@@ -48,6 +55,11 @@ std::vector<uint8_t> CanonicalLinkBytes(const CapLink& link);
 bool SignLink(CapLink* link, const PrivKey& issuer_priv);
 
 struct ChainVerifyResult {
+  ChainVerifyResult();
+  ~ChainVerifyResult();
+  ChainVerifyResult(const ChainVerifyResult&);
+  ChainVerifyResult& operator=(const ChainVerifyResult&);
+
   bool ok = false;
   // "ok" | "cap-chain-invalid" | "cap-untrusted-anchor" | "cap-revoked" |
   // "cap-expired"

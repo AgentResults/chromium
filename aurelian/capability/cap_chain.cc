@@ -10,6 +10,19 @@
 
 namespace aurelian {
 
+CapLink::CapLink() = default;
+CapLink::~CapLink() = default;
+CapLink::CapLink(const CapLink&) = default;
+CapLink& CapLink::operator=(const CapLink&) = default;
+CapLink::CapLink(CapLink&&) = default;
+CapLink& CapLink::operator=(CapLink&&) = default;
+
+ChainVerifyResult::ChainVerifyResult() = default;
+ChainVerifyResult::~ChainVerifyResult() = default;
+ChainVerifyResult::ChainVerifyResult(const ChainVerifyResult&) = default;
+ChainVerifyResult& ChainVerifyResult::operator=(const ChainVerifyResult&) =
+    default;
+
 namespace {
 
 void AppendField(std::vector<uint8_t>* out, const std::string& s) {

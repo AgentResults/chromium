@@ -5,10 +5,13 @@
 #ifndef AURELIAN_RENDERER_AURELIAN_RENDER_FRAME_OBSERVER_H_
 #define AURELIAN_RENDERER_AURELIAN_RENDER_FRAME_OBSERVER_H_
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "aurelian/capability/cap_chain.h"
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 #include "base/memory/weak_ptr.h"
 #include "content/public/renderer/render_frame.h"
@@ -44,6 +47,14 @@ class AurelianRenderFrameObserver
                 DispatchCallback callback) override;
   void Subscribe(const std::vector<uint8_t>& envelope,
                  SubscribeCallback callback) override;
+  void SetTrustAnchor(const std::vector<uint8_t>& anchor_pub) override;
+
+  // Verifies a cap chain against this membrane's trust anchor and enforces the
+  // effective predicate against `verb`/`target`. Returns an empty string if the
+  // op is permitted, or a JSON broken reason if it is denied.
+  std::string CheckCap(const std::vector<CapLink>& chain,
+                       const std::string& verb,
+                       const std::string& target);
 
   void BindAurelianWire(
       mojo::PendingAssociatedReceiver<aurelian::mojom::AurelianWire> receiver);
@@ -68,6 +79,9 @@ class AurelianRenderFrameObserver
   std::string EvalString(const std::string& js);
 
   mojo::AssociatedReceiver<aurelian::mojom::AurelianWire> receiver_{this};
+  // Operator trust anchor for this membrane (C8). Set via SetTrustAnchor.
+  PubKey trusted_anchor_{};
+  bool has_anchor_ = false;
   // Node registry — opaque, defined in .cc.
   struct NodeRegistryImpl;
   std::unique_ptr<NodeRegistryImpl> registry_;

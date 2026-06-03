@@ -178,6 +178,8 @@ if (enable_aurelian) {
       "capability/cap_chain.h",
       "capability/cap_predicate.cc",
       "capability/cap_predicate.h",
+      "capability/cap_wire.cc",
+      "capability/cap_wire.h",
     ]
 
     deps = [
@@ -313,6 +315,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "capability/cap_membrane_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
@@ -334,6 +337,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_a11y",
+      ":aurelian_capability",
       ":aurelian_devtools",
       ":aurelian_extensions",
       ":aurelian_handles",

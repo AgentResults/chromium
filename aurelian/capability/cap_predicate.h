@@ -23,6 +23,13 @@ namespace aurelian {
 struct CapPredicate {
   enum class Mode { kUnset, kRead, kWrite };
 
+  CapPredicate();
+  ~CapPredicate();
+  CapPredicate(const CapPredicate&);
+  CapPredicate& operator=(const CapPredicate&);
+  CapPredicate(CapPredicate&&);
+  CapPredicate& operator=(CapPredicate&&);
+
   Mode mode = Mode::kUnset;
   std::vector<std::string> verbs;  // empty = any verb permitted
   int64_t expires = 0;             // unix seconds; 0 = never expires

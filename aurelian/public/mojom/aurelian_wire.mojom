@@ -20,6 +20,13 @@ interface AurelianWire {
   // implements VeliteSink and receives frames until it drops the
   // receiver, which the producer treats as cancel.
   Subscribe(array<uint8> envelope) => (pending_receiver<VeliteSink> sink);
+
+  // Provision this frame membrane's operator trust anchor (a 32-byte Ed25519
+  // public key) (C8). The browser hub sets it once at frame bind time from the
+  // anchor it cached from Agrippa at boot (design §11.5). Cap-carrying Dispatch
+  // envelopes are then verified back to THIS anchor by the renderer membrane
+  // itself — the hub does not get to vouch per-cap.
+  SetTrustAnchor(array<uint8> anchor_pub);
 };
 
 // Reverse channel for subscription frames. One frame each (opaque bytes
