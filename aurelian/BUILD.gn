@@ -176,6 +176,8 @@ if (enable_aurelian) {
     sources = [
       "capability/cap_chain.cc",
       "capability/cap_chain.h",
+      "capability/cap_membrane.cc",
+      "capability/cap_membrane.h",
       "capability/cap_predicate.cc",
       "capability/cap_predicate.h",
       "capability/cap_wire.cc",
@@ -289,6 +291,7 @@ if (enable_aurelian) {
   test("aurelian_unittests") {
     sources = [
       "capability/cap_chain_unittest.cc",
+      "capability/cap_membrane_unittest.cc",
       "capability/cap_predicate_unittest.cc",
       "handles/streams/subscription_producer_unittest.cc",
     ]

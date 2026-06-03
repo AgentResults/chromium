@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "aurelian/capability/cap_chain.h"
+#include "aurelian/capability/cap_membrane.h"
 #include "aurelian/capability/cap_predicate.h"
 #include "aurelian/capability/cap_wire.h"
 #include "base/functional/bind.h"
@@ -209,27 +210,10 @@ std::string AurelianRenderFrameObserver::CheckCap(
     const std::vector<CapLink>& chain,
     const std::string& verb,
     const std::string& target) {
-  // No anchor provisioned → nothing is trusted (the renderer cannot vouch for
-  // itself). This is the post-bootstrap enforcing state.
-  if (!has_anchor_) {
-    return "{\"error\":\"cap-untrusted-anchor\"}";
-  }
-  int64_t now = base::Time::Now().ToTimeT();
-
-  // 1. Verify the WHOLE chain back to this membrane's anchor.
-  ChainVerifyResult chain_result =
-      VerifyChain(chain, trusted_anchor_, now, /*revoked=*/{});
-  if (!chain_result.ok) {
-    return "{\"error\":\"" + chain_result.reason + "\"}";
-  }
-
-  // 2. Enforce the effective (most-attenuated) predicate against this op.
-  std::string reason;
-  if (!chain_result.effective.Allows(verb, IsMutatingVerb(verb), target, now,
-                                     &reason)) {
-    return "{\"error\":\"" + reason + "\"}";
-  }
-  return std::string();
+  // The renderer membrane is one instance of the shared cap check; it differs
+  // only in its verb→mutation classification.
+  return EnforceCap(chain, trusted_anchor_, has_anchor_, verb,
+                    IsMutatingVerb(verb), target, base::Time::Now().ToTimeT());
 }
 
 // ---------------------------------------------------------------------------
