@@ -97,10 +97,6 @@ source_set("asmodeus") {
     "asmodeus_media_server.h",
     "asmodeus_state.cc",
     "asmodeus_state.h",
-    "asmodeus_url_loader_proxy.cc",
-    "asmodeus_url_loader_proxy.h",
-    "asmodeus_url_throttle.cc",
-    "asmodeus_url_throttle.h",
   ]
 
   deps = [

@@ -58,8 +58,6 @@
 #include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/ai/ai_manager.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
-#include "chrome/browser/asmodeus/asmodeus_url_loader_proxy.h"
-#include "chrome/browser/asmodeus/asmodeus_url_throttle.h"
 #include "media/audio/asmodeus/asmodeus_participant_registry.h"
 #include "chrome/browser/bluetooth/chrome_bluetooth_delegate.h"
 #include "chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.h"
@@ -5956,14 +5954,6 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
 
   std::vector<std::unique_ptr<blink::URLLoaderThrottle>> result;
 
-  // Asmodeus: block reCAPTCHA for agent participant WebContents.
-  if (wc_getter) {
-    if (auto asmodeus_throttle =
-            asmodeus::MaybeCreateAsmodeusThrottle(wc_getter.Run())) {
-      result.push_back(std::move(asmodeus_throttle));
-    }
-  }
-
   // Aurelian: intercept rules (default pass-through, no rules = no effect).
   result.push_back(aurelian::CreateAurelianThrottle());
 
@@ -6532,20 +6522,6 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
     bool* disable_secure_dns,
     network::mojom::URLLoaderFactoryOverridePtr* factory_override,
     scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner) {
-  // Asmodeus: proxy URL loader factory for participant frames to block
-  // reCAPTCHA subresource loads (scripts, iframes).
-  // Check WebContents tag (set at construction time, before navigation).
-  if (frame) {
-    auto* wc = content::WebContents::FromRenderFrameHost(frame);
-    if (wc && asmodeus::AsmodeusParticipantTag::IsTagged(wc)) {
-      auto [receiver, remote] = factory_builder.Append();
-      new asmodeus::AsmodeusURLLoaderProxy(std::move(receiver),
-                                            std::move(remote));
-      LOG(WARNING) << "[Asmodeus] URL proxy installed for frame in "
-                   << wc->GetLastCommittedURL().spec().substr(0, 60);
-    }
-  }
-
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   auto* web_request_api =
       extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(

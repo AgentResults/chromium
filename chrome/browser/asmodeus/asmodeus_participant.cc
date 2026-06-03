@@ -7,7 +7,6 @@
 #include <sys/stat.h>
 
 #include "base/logging.h"
-#include "chrome/browser/asmodeus/asmodeus_url_throttle.h"
 #include "base/process/process.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
@@ -51,8 +50,6 @@ AsmodeusParticipant::AsmodeusParticipant(
   web_contents_ = content::WebContents::Create(params);
   web_contents_->SetDelegate(this);
   Observe(web_contents_.get());
-  // Tag for reCAPTCHA blocking in URL loader throttle.
-  asmodeus::AsmodeusParticipantTag::Tag(web_contents_.get());
 
   // Expose as DevTools target so we can inspect/screenshot via CDP.
   content::DevToolsAgentHost::GetOrCreateFor(web_contents_.get());
