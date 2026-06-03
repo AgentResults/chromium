@@ -164,6 +164,31 @@ void AurelianRenderFrameObserver::Dispatch(
 // ---------------------------------------------------------------------------
 // C6 subscription streams — one VeliteSink Remote per subscription.
 // ---------------------------------------------------------------------------
+// Installs an idempotent MutationObserver that pushes a label per mutation
+// into a main-world queue the native drain timer reads. Setting
+// __aurelian_mut_init lets a subscriber confirm the observer is live before
+// mutating.
+constexpr char kInstallMutationObserverJs[] = R"JS(
+(function(){
+  if (window.__aurelian_mut_init) return true;
+  window.__aurelian_mut_init = true;
+  window.__aurelian_mut_queue = [];
+  var mo = new MutationObserver(function(muts){
+    for (var i=0;i<muts.length;i++){
+      var m = muts[i];
+      var t = m.target;
+      var label = m.type + ':' + (t.id ? '#'+t.id : t.nodeName);
+      if (m.type === 'attributes') label += ':' + m.attributeName;
+      window.__aurelian_mut_queue.push(label);
+    }
+  });
+  mo.observe(document.documentElement || document,
+             {childList:true, subtree:true, attributes:true, characterData:true});
+  window.__aurelian_mut_observer = mo;
+  return true;
+})()
+)JS";
+
 void AurelianRenderFrameObserver::Subscribe(
     const std::vector<uint8_t>& envelope,
     SubscribeCallback callback) {
@@ -171,10 +196,17 @@ void AurelianRenderFrameObserver::Subscribe(
 
   auto rs = std::make_unique<RendererStream>();
   rs->name = stream;
-  // Bind a VeliteSink Remote; hand its receiver back to the caller (browser),
+  // Bind a VeliteSink Remote; its receiver goes back to the caller (browser),
   // which implements VeliteSink and receives Frame() calls.
   mojo::PendingReceiver<aurelian::mojom::VeliteSink> receiver =
       rs->sink.BindNewPipeAndPassReceiver();
+
+  // Install the producer BEFORE replying, so a subscriber that waits for the
+  // reply (or for __aurelian_mut_init) cannot race ahead of the producer.
+  if (stream == "mutations") {
+    EvalString(kInstallMutationObserverJs);
+  }
+
   std::move(callback).Run(std::move(receiver));
 
   RendererStream* raw = rs.get();
@@ -183,22 +215,58 @@ void AurelianRenderFrameObserver::Subscribe(
       base::BindOnce(&AurelianRenderFrameObserver::OnStreamDisconnect,
                      weak_factory_.GetWeakPtr(), raw));
 
-  // Start the producer. C6.b ships the "test" stream (a periodic tick) to
-  // prove the cross-process pipe; C6.c/d bind real producers (MutationObserver,
-  // console) to named streams.
+  // Start the producer timer. "test" is a periodic tick (C6.b); "mutations"
+  // drains the MutationObserver queue (C6.c).
   if (stream == "test") {
     raw->timer.Start(
         FROM_HERE, base::Milliseconds(20),
         base::BindRepeating(&AurelianRenderFrameObserver::EmitTestFrame,
+                            weak_factory_.GetWeakPtr(), raw));
+  } else if (stream == "mutations") {
+    raw->timer.Start(
+        FROM_HERE, base::Milliseconds(50),
+        base::BindRepeating(&AurelianRenderFrameObserver::DrainMutationFrames,
                             weak_factory_.GetWeakPtr(), raw));
   }
 
   streams_.push_back(std::move(rs));
 }
 
+std::string AurelianRenderFrameObserver::EvalString(const std::string& js) {
+  if (!render_frame() || !render_frame()->GetWebFrame()) return std::string();
+  auto* frame = render_frame()->GetWebFrame();
+  auto* isolate = frame->GetAgentGroupScheduler()->Isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Value> result = frame->ExecuteScriptAndReturnValue(
+      blink::WebScriptSource(blink::WebString::FromUTF8(js)));
+  if (result.IsEmpty() || !result->IsString()) return std::string();
+  v8::String::Utf8Value utf8(isolate, result);
+  return std::string(*utf8, utf8.length());
+}
+
 void AurelianRenderFrameObserver::EmitTestFrame(RendererStream* stream) {
   std::string f = "tick-" + base::NumberToString(stream->counter++);
   stream->sink->Frame(std::vector<uint8_t>(f.begin(), f.end()));
+}
+
+void AurelianRenderFrameObserver::DrainMutationFrames(RendererStream* stream) {
+  // Pull and clear the queued mutation labels (separated by \x01).
+  std::string joined = EvalString(
+      "(window.__aurelian_mut_queue?"
+      "window.__aurelian_mut_queue.splice(0).join(String.fromCharCode(1)):'')");
+  if (joined.empty()) return;
+  size_t start = 0;
+  while (start <= joined.size()) {
+    size_t end = joined.find('\x01', start);
+    std::string piece = (end == std::string::npos)
+                            ? joined.substr(start)
+                            : joined.substr(start, end - start);
+    if (!piece.empty()) {
+      stream->sink->Frame(std::vector<uint8_t>(piece.begin(), piece.end()));
+    }
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
 }
 
 void AurelianRenderFrameObserver::OnStreamDisconnect(RendererStream* stream) {

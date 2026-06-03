@@ -57,7 +57,10 @@ class AurelianRenderFrameObserver
   // C6 subscription stream state (one VeliteSink Remote per subscription).
   struct RendererStream;
   void EmitTestFrame(RendererStream* stream);
+  void DrainMutationFrames(RendererStream* stream);
   void OnStreamDisconnect(RendererStream* stream);
+  // Runs `js` in the main world and returns its string result ("" otherwise).
+  std::string EvalString(const std::string& js);
 
   mojo::AssociatedReceiver<aurelian::mojom::AurelianWire> receiver_{this};
   // Node registry — opaque, defined in .cc.

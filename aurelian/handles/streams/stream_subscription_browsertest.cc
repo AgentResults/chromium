@@ -26,6 +26,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -35,11 +36,12 @@ namespace aurelian {
 
 class AurelianStreamBrowserTest : public InProcessBrowserTest {
  protected:
+  content::WebContents* GetWC() {
+    return browser()->tab_strip_model()->GetActiveWebContents();
+  }
+
   content::RenderFrameHost* MainFrame() {
-    return browser()
-        ->tab_strip_model()
-        ->GetActiveWebContents()
-        ->GetPrimaryMainFrame();
+    return GetWC()->GetPrimaryMainFrame();
   }
 
   void GetWire(mojo::AssociatedRemote<mojom::AurelianWire>* wire) {
@@ -121,6 +123,54 @@ IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, CancelStopsFrames) {
   bridge.reset();
   PumpFor(base::Milliseconds(300));
   EXPECT_EQ(frames.size(), count) << "frames kept arriving after cancel";
+}
+
+// C6.c — the renderer /dom/mutations producer (MutationObserver) delivers
+// a frame per DOM mutation over Mojo.
+IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, ReceivesMutations) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<body><div id='host'>m</div></body>")));
+
+  mojo::AssociatedRemote<mojom::AurelianWire> wire;
+  GetWire(&wire);
+
+  std::vector<std::string> frames;
+  MojoStreamBridge bridge(base::BindRepeating(
+      [](std::vector<std::string>* f, const std::vector<uint8_t>& bytes) {
+        f->emplace_back(bytes.begin(), bytes.end());
+      },
+      &frames));
+  bridge.Subscribe(wire, "mutations");
+
+  // Wait until the renderer has installed the MutationObserver (it does so in
+  // Subscribe, before replying), so the mutation below cannot race it.
+  EXPECT_EQ(true,
+            content::EvalJs(
+                GetWC(),
+                "(async()=>{for(let i=0;i<200;i++){if(window.__aurelian_mut_init)"
+                "return true;await new Promise(r=>setTimeout(r,10));}"
+                "return false;})()")
+                .ExtractBool());
+
+  // Mutate the DOM: an attribute change and a node insertion.
+  ASSERT_TRUE(content::ExecJs(
+      GetWC(),
+      "document.getElementById('host').setAttribute('data-x','1');"
+      "document.body.appendChild(document.createElement('span'));"));
+
+  PumpUntil(base::BindLambdaForTesting([&]() { return !frames.empty(); }),
+            base::Seconds(10));
+  ASSERT_FALSE(frames.empty()) << "no mutation frames arrived";
+
+  bool found_attr = false;
+  bool found_child = false;
+  for (const auto& f : frames) {
+    if (f.find("attributes") != std::string::npos) found_attr = true;
+    if (f.find("childList") != std::string::npos) found_child = true;
+  }
+  EXPECT_TRUE(found_attr || found_child)
+      << "expected an attributes/childList mutation frame";
 }
 
 }  // namespace aurelian
