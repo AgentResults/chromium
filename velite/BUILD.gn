@@ -293,7 +293,6 @@ source_set("velite_forth_handle") {
   sources = [
     "$_velite_src/forth-handle/src/forth_canonical_resolver.cpp",
     "$_velite_src/forth-handle/src/forth_handle.cpp",
-    "$_velite_src/forth-handle/src/forth_handle_adapter.cpp",
     "$_velite_src/forth-handle/src/forth_install_wire.cpp",
     "$_velite_src/forth-handle/src/handle_prim_register.cpp",
     "$_velite_src/forth-handle/src/handle_prims.cpp",
