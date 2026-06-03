@@ -13,4 +13,17 @@ interface AurelianWire {
   // Dispatch an AgentSpaces envelope. The envelope and reply are
   // opaque byte arrays (simplified for C2; full CBOR in later slices).
   Dispatch(array<uint8> envelope) => (array<uint8> reply);
+
+  // Open a subscription (C6). The envelope names the stream (e.g.
+  // "mutations", "console", "test"). The producer (this frame) binds a
+  // VeliteSink Remote and returns its receiver to the caller; the caller
+  // implements VeliteSink and receives frames until it drops the
+  // receiver, which the producer treats as cancel.
+  Subscribe(array<uint8> envelope) => (pending_receiver<VeliteSink> sink);
+};
+
+// Reverse channel for subscription frames. One frame each (opaque bytes
+// for now). Fire-and-forget.
+interface VeliteSink {
+  Frame(array<uint8> frame);
 };

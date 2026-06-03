@@ -7,8 +7,10 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
+#include "base/memory/weak_ptr.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -40,6 +42,8 @@ class AurelianRenderFrameObserver
   // aurelian::mojom::AurelianWire:
   void Dispatch(const std::vector<uint8_t>& envelope,
                 DispatchCallback callback) override;
+  void Subscribe(const std::vector<uint8_t>& envelope,
+                 SubscribeCallback callback) override;
 
   void BindAurelianWire(
       mojo::PendingAssociatedReceiver<aurelian::mojom::AurelianWire> receiver);
@@ -50,10 +54,18 @@ class AurelianRenderFrameObserver
   // Ensure a node is accessible from JS via __aurelian_nodes[id].
   void EnsureNodeBridge(int node_id, const blink::WebElement& el);
 
+  // C6 subscription stream state (one VeliteSink Remote per subscription).
+  struct RendererStream;
+  void EmitTestFrame(RendererStream* stream);
+  void OnStreamDisconnect(RendererStream* stream);
+
   mojo::AssociatedReceiver<aurelian::mojom::AurelianWire> receiver_{this};
   // Node registry — opaque, defined in .cc.
   struct NodeRegistryImpl;
   std::unique_ptr<NodeRegistryImpl> registry_;
+  std::vector<std::unique_ptr<RendererStream>> streams_;
+
+  base::WeakPtrFactory<AurelianRenderFrameObserver> weak_factory_{this};
 };
 
 }  // namespace aurelian

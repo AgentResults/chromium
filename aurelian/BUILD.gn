@@ -97,12 +97,16 @@ if (enable_aurelian) {
   # Velite's SubscriptionHandle, whose typeinfo is provided by //velite).
   source_set("aurelian_streams") {
     sources = [
+      "handles/streams/mojo_stream_bridge.cc",
+      "handles/streams/mojo_stream_bridge.h",
       "handles/streams/subscription_producer.cc",
       "handles/streams/subscription_producer.h",
     ]
 
     deps = [
+      "//aurelian/public/mojom",
       "//base",
+      "//mojo/public/cpp/bindings",
       "//velite",
     ]
 
@@ -213,6 +217,7 @@ if (enable_aurelian) {
       "handles/browser/tab_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
+      "handles/streams/stream_subscription_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
     ]
 
@@ -221,6 +226,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_handles",
       ":aurelian_network",
+      ":aurelian_streams",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",

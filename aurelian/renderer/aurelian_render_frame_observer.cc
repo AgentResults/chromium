@@ -10,11 +10,15 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "content/public/renderer/render_frame.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
@@ -100,6 +104,16 @@ bool ParseInt(const std::string& s, int* out) {
 
 }  // namespace
 
+// One VeliteSink Remote (+ its producer timer) per active subscription.
+// Defined before the destructor so the std::unique_ptr<RendererStream>
+// vector can be destroyed (needs the complete type).
+struct AurelianRenderFrameObserver::RendererStream {
+  std::string name;
+  mojo::Remote<aurelian::mojom::VeliteSink> sink;
+  base::RepeatingTimer timer;
+  int counter = 0;
+};
+
 AurelianRenderFrameObserver::AurelianRenderFrameObserver(
     content::RenderFrame* frame)
     : content::RenderFrameObserver(frame),
@@ -145,6 +159,55 @@ void AurelianRenderFrameObserver::Dispatch(
   std::string reply_str = DispatchVerb(verb, param);
   std::vector<uint8_t> reply(reply_str.begin(), reply_str.end());
   std::move(callback).Run(reply);
+}
+
+// ---------------------------------------------------------------------------
+// C6 subscription streams — one VeliteSink Remote per subscription.
+// ---------------------------------------------------------------------------
+void AurelianRenderFrameObserver::Subscribe(
+    const std::vector<uint8_t>& envelope,
+    SubscribeCallback callback) {
+  std::string stream(envelope.begin(), envelope.end());
+
+  auto rs = std::make_unique<RendererStream>();
+  rs->name = stream;
+  // Bind a VeliteSink Remote; hand its receiver back to the caller (browser),
+  // which implements VeliteSink and receives Frame() calls.
+  mojo::PendingReceiver<aurelian::mojom::VeliteSink> receiver =
+      rs->sink.BindNewPipeAndPassReceiver();
+  std::move(callback).Run(std::move(receiver));
+
+  RendererStream* raw = rs.get();
+  // Browser dropping its sink => cancel: stop + drop the stream.
+  rs->sink.set_disconnect_handler(
+      base::BindOnce(&AurelianRenderFrameObserver::OnStreamDisconnect,
+                     weak_factory_.GetWeakPtr(), raw));
+
+  // Start the producer. C6.b ships the "test" stream (a periodic tick) to
+  // prove the cross-process pipe; C6.c/d bind real producers (MutationObserver,
+  // console) to named streams.
+  if (stream == "test") {
+    raw->timer.Start(
+        FROM_HERE, base::Milliseconds(20),
+        base::BindRepeating(&AurelianRenderFrameObserver::EmitTestFrame,
+                            weak_factory_.GetWeakPtr(), raw));
+  }
+
+  streams_.push_back(std::move(rs));
+}
+
+void AurelianRenderFrameObserver::EmitTestFrame(RendererStream* stream) {
+  std::string f = "tick-" + base::NumberToString(stream->counter++);
+  stream->sink->Frame(std::vector<uint8_t>(f.begin(), f.end()));
+}
+
+void AurelianRenderFrameObserver::OnStreamDisconnect(RendererStream* stream) {
+  for (auto it = streams_.begin(); it != streams_.end(); ++it) {
+    if (it->get() == stream) {
+      streams_.erase(it);
+      return;
+    }
+  }
 }
 
 std::string AurelianRenderFrameObserver::DispatchVerb(
