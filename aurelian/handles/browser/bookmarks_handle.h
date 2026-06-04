@@ -34,6 +34,19 @@ std::vector<BookmarkInfo> ListBookmarks(bookmarks::BookmarkModel* model);
 // thread.
 bool RemoveBookmark(bookmarks::BookmarkModel* model, const std::string& url);
 
+// Adds a bookmark INTO a named folder under the bookmark bar (creating the
+// folder if it doesn't exist). Returns false if the model/url is unusable. UI
+// thread.
+bool AddBookmarkInFolder(bookmarks::BookmarkModel* model,
+                         const std::string& folder,
+                         const std::string& title,
+                         const std::string& url);
+
+// Lists the bookmarks inside a named bookmark-bar folder ({} if no such
+// folder). UI thread.
+std::vector<BookmarkInfo> ListFolder(bookmarks::BookmarkModel* model,
+                                     const std::string& folder);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_BOOKMARKS_HANDLE_H_

@@ -62,4 +62,20 @@ IN_PROC_BROWSER_TEST_F(AurelianBookmarksBrowserTest, AddListRemove) {
   EXPECT_FALSE(RemoveBookmark(Model(), "https://nope.example.com/"));
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianBookmarksBrowserTest, Folders) {
+  const std::string url = "https://aurelian.example.com/in-folder";
+  ASSERT_TRUE(AddBookmarkInFolder(Model(), "Work", "Folder Bookmark", url));
+
+  // The bookmark is inside the folder...
+  std::string title;
+  ASSERT_TRUE(InList(ListFolder(Model(), "Work"), url, &title));
+  EXPECT_EQ(title, "Folder Bookmark");
+
+  // ...and NOT at the bookmark bar's top level.
+  EXPECT_FALSE(InList(ListBookmarks(Model()), url, nullptr));
+
+  // A non-existent folder lists nothing.
+  EXPECT_TRUE(ListFolder(Model(), "Nope").empty());
+}
+
 }  // namespace aurelian
