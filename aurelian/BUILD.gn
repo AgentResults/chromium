@@ -137,6 +137,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_system",
+      ":aurelian_tabs_overview",
       "//base",
       "//velite",
     ]
@@ -161,6 +162,26 @@ if (enable_aurelian) {
     deps = [
       "//base",
       "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # Browser-wide tab overview reached from the root (C9.c). No RTTI.
+  source_set("aurelian_tabs_overview") {
+    sources = [
+      "handles/browser/tabs_overview.cc",
+      "handles/browser/tabs_overview.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser/ui",
+      "//content/public/browser",
+      "//url",
     ]
 
     configs -= [

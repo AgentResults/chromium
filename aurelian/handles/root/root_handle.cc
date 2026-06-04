@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "aurelian/handles/browser/system_handle.h"
+#include "aurelian/handles/browser/tabs_overview.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -55,6 +56,38 @@ class SystemInfoHandle : public Handle {
   Value identity_{std::string("legion://chrome/system")};
 };
 
+// legion://chrome/tabs — the live, browser-wide tab strip reached from the
+// root (no Browser* held; queries BrowserList).
+class TabsOverviewHandle : public Handle {
+ public:
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const Value& resolved_value() const override { return identity_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override {
+    return "legion://chrome/tabs";
+  }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const Value& /*spec*/) override {
+    if (msg == "__getIdentity") {
+      return ValueHandle::make(Value(std::string("legion://chrome/tabs")));
+    }
+    if (msg == "count") {
+      return ValueHandle::make(Value(GetTabsOverview().open_count));
+    }
+    if (msg == "activeUrl") {
+      return ValueHandle::make(Value(GetTabsOverview().active_url));
+    }
+    return ValueHandle::make_broken("not-callable");
+  }
+
+  void tell(std::string_view, const Value&) override {}
+
+ private:
+  Value identity_{std::string("legion://chrome/tabs")};
+};
+
 // legion://chrome/ — the navigable root.
 class ChromeRootHandle : public Handle {
  public:
@@ -78,6 +111,9 @@ class ChromeRootHandle : public Handle {
     }
     if (msg == "system") {
       return std::make_shared<SystemInfoHandle>();
+    }
+    if (msg == "tabs") {
+      return std::make_shared<TabsOverviewHandle>();
     }
     return ValueHandle::make_broken("not-callable");
   }

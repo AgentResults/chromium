@@ -8,8 +8,11 @@
 #include "aurelian/handles/root/root_handle.h"
 
 #include "base/process/process.h"
+#include "base/strings/string_number_conversions.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
+#include "url/gurl.h"
 
 namespace aurelian {
 
@@ -32,6 +35,28 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToRealCapability) {
 
   // An unknown child is broken.
   EXPECT_NE(RootDispatch(root, "bogus").find("broken"), std::string::npos);
+
+  DestroyChromeRoot(root);
+}
+
+IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToTabsCapability) {
+  // The test browser has a real, live tab; point it at a known URL.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<title>root-tabs</title>")));
+
+  ChromeRoot* root = CreateChromeRoot();
+  ASSERT_NE(root, nullptr);
+
+  // Walk root -> tabs -> count, reaching the REAL live tab strip: at least the
+  // one tab this browser test opened.
+  std::string count = RootDispatch(root, "tabs/count");
+  int n = 0;
+  ASSERT_TRUE(base::StringToInt(count, &n)) << "count not an int: " << count;
+  EXPECT_GE(n, 1) << count;
+
+  // The active tab's URL is reachable too and reflects where we navigated.
+  std::string active = RootDispatch(root, "tabs/activeUrl");
+  EXPECT_NE(active.find("data:text/html"), std::string::npos) << active;
 
   DestroyChromeRoot(root);
 }
