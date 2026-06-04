@@ -197,6 +197,27 @@ if (enable_aurelian) {
     ]
   }
 
+  # C9 bring-up external WSS peer (design §13). No RTTI; uses Velite's
+  # WebSocket channel/listener + AgentSpace root handle.
+  source_set("aurelian_federation") {
+    sources = [
+      "federation/wss_peer.cc",
+      "federation/wss_peer.h",
+    ]
+
+    deps = [
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Subscription stream producer (C6). No RTTI (no dynamic_cast here; uses
   # Velite's SubscriptionHandle, whose typeinfo is provided by //velite).
   source_set("aurelian_streams") {
@@ -371,6 +392,7 @@ if (enable_aurelian) {
   test("aurelian_browsertests") {
     sources = [
       "capability/cap_membrane_browsertest.cc",
+      "federation/wss_peer_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
@@ -397,6 +419,7 @@ if (enable_aurelian) {
       ":aurelian_capability",
       ":aurelian_devtools",
       ":aurelian_extensions",
+      ":aurelian_federation",
       ":aurelian_handles",
       ":aurelian_network",
       ":aurelian_permissions",
