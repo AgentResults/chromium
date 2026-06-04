@@ -87,6 +87,27 @@ if (enable_aurelian) {
     ]
   }
 
+  # Tabstrip open / close / activate (C1.x). No RTTI.
+  source_set("aurelian_tabstrip") {
+    sources = [
+      "handles/browser/tabstrip_handle.cc",
+      "handles/browser/tabstrip_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/tabs:tab_enums",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # System info: browser + renderer process counts (C15.a). No RTTI.
   source_set("aurelian_system") {
     sources = [
@@ -523,6 +544,7 @@ if (enable_aurelian) {
       "handles/browser/system_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
       "handles/browser/tabgroups_handle_browsertest.cc",
+      "handles/browser/tabstrip_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
@@ -548,6 +570,7 @@ if (enable_aurelian) {
       ":aurelian_streams",
       ":aurelian_system",
       ":aurelian_tabgroups",
+      ":aurelian_tabstrip",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",
