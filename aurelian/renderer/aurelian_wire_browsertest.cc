@@ -202,4 +202,18 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, GetAttributeReadsValue) {
   EXPECT_EQ(missing, "null") << "got: " << missing;
 }
 
+// dom.node.style reads a computed CSS property (the design's /dom/node style;
+// C3 shipped rect but not computed style).
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, ComputedStyleReadsValue) {
+  NavigateToTestPage();
+  auto ids = Dispatch("dom.query", "#target");
+  ASSERT_NE(ids, "[]");
+  std::string id = ids.substr(1, ids.find_first_of(",]") - 1);
+
+  // Apply an inline style, then read the computed value of a property.
+  Dispatch("dom.node.setAttribute", id + "\tstyle\tcolor: rgb(0, 128, 0)");
+  auto color = Dispatch("dom.node.style", id + "\tcolor");
+  EXPECT_NE(color.find("128"), std::string::npos) << "got: " << color;
+}
+
 }  // namespace aurelian

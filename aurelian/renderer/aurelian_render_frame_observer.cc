@@ -512,6 +512,19 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
     return JsonStr(el.GetAttribute(attr_name).Utf8());
   }
 
+  if (verb == "dom.node.style") {
+    // param: "nodeId\tproperty" — returns the computed CSS value.
+    std::istringstream iss(param);
+    std::string id_str, prop;
+    std::getline(iss, id_str, '\t');
+    std::getline(iss, prop, '\t');
+    int node_id = 0;
+    if (!ParseInt(id_str, &node_id)) return "{\"error\":\"bad-node-id\"}";
+    auto el = registry_->NodeFor(node_id);
+    if (el.IsNull()) return "{\"error\":\"gone\"}";
+    return JsonStr(el.GetComputedValue(blink::WebString::FromUTF8(prop)).Utf8());
+  }
+
   if (verb == "dom.node.click") {
     int node_id = 0;
     if (!ParseInt(param, &node_id)) return "{\"error\":\"bad-node-id\"}";
