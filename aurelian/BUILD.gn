@@ -484,6 +484,27 @@ if (enable_aurelian) {
     ]
   }
 
+  # Cap-gated browser ops (C8.g): the browser membrane guards a real Chromium
+  # subsystem call. No RTTI; bridges the cap layer + the network handle.
+  source_set("aurelian_cap_browser") {
+    sources = [
+      "capability/cap_gated_cookies.cc",
+      "capability/cap_gated_cookies.h",
+    ]
+
+    deps = [
+      ":aurelian_capability",
+      ":aurelian_network",
+      "//base",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Subscription stream producer (C6). No RTTI (no dynamic_cast here; uses
   # Velite's SubscriptionHandle, whose typeinfo is provided by //velite).
   source_set("aurelian_streams") {
@@ -657,6 +678,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "capability/cap_gated_cookies_browsertest.cc",
       "capability/cap_membrane_browsertest.cc",
       "federation/wss_peer_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
@@ -697,6 +719,7 @@ if (enable_aurelian) {
       ":aurelian_a11y",
       ":aurelian_audio",
       ":aurelian_bookmarks",
+      ":aurelian_cap_browser",
       ":aurelian_clipboard",
       ":aurelian_capability",
       ":aurelian_devtools",
