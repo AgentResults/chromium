@@ -87,6 +87,26 @@ if (enable_aurelian) {
     ]
   }
 
+  # Bookmarks add / list / remove (C13.a). No RTTI.
+  source_set("aurelian_bookmarks") {
+    sources = [
+      "handles/browser/bookmarks_handle.cc",
+      "handles/browser/bookmarks_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/bookmarks/browser",
+      "//components/bookmarks/common",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Emulation: user-agent override (C11.a). No RTTI.
   source_set("aurelian_emulation") {
     sources = [
@@ -413,6 +433,7 @@ if (enable_aurelian) {
       "capability/cap_membrane_browsertest.cc",
       "federation/wss_peer_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
+      "handles/browser/bookmarks_handle_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
@@ -436,6 +457,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_a11y",
       ":aurelian_audio",
+      ":aurelian_bookmarks",
       ":aurelian_capability",
       ":aurelian_devtools",
       ":aurelian_emulation",
@@ -452,6 +474,8 @@ if (enable_aurelian) {
       "//chrome/browser/ui",
       "//chrome/test:browser_tests_runner",
       "//chrome/test:test_support",
+      "//components/bookmarks/browser",
+      "//components/bookmarks/test",
       "//components/content_settings/core/browser",
       "//components/download/public/common:public",
       "//content/public/browser",
