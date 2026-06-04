@@ -705,6 +705,26 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
+  # C-MEDIA-2d: the TTS virtual microphone producer. Drains MediaSeam audio into
+  # the shared-memory ring buffer the fork's FakeAudioInputStream reads as the
+  # browser mic. No RTTI / no Velite (plain POSIX shm + //base).
+  source_set("aurelian_virtual_mic") {
+    sources = [
+      "media/aurelian_virtual_mic.cc",
+      "media/aurelian_virtual_mic.h",
+    ]
+
+    deps = [
+      ":aurelian_media_seam",
+      "//base",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # C-MEDIA-2: the content-layer virtual camera. Registers a REAL enumerable
   # camera with Chromium's video capture service (the honest browser-process
   # virtual-device seam), so the avatar appears to getUserMedia as the browser
@@ -860,6 +880,7 @@ if (enable_aurelian) {
       "capability/cap_predicate_unittest.cc",
       "federation/uds_register_unittest.cc",
       "handles/media/media_seam_unittest.cc",
+      "media/aurelian_virtual_mic_unittest.cc",
       "handles/profile/credentials_handle_unittest.cc",
       "handles/streams/subscription_producer_unittest.cc",
     ]
@@ -870,6 +891,7 @@ if (enable_aurelian) {
       ":aurelian_media",
       ":aurelian_streams",
       ":aurelian_uds_register",
+      ":aurelian_virtual_mic",
       "//base",
       "//base/test:run_all_unittests",
       "//base/test:test_support",
