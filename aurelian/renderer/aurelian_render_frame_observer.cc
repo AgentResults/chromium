@@ -525,6 +525,15 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
     return JsonStr(el.GetComputedValue(blink::WebString::FromUTF8(prop)).Utf8());
   }
 
+  if (verb == "dom.node.scrollIntoView") {
+    int node_id = 0;
+    if (!ParseInt(param, &node_id)) return "{\"error\":\"bad-node-id\"}";
+    auto el = registry_->NodeFor(node_id);
+    if (el.IsNull()) return "{\"error\":\"gone\"}";
+    el.ScrollIntoViewIfNeeded();
+    return "{\"ok\":true}";
+  }
+
   if (verb == "dom.node.click") {
     int node_id = 0;
     if (!ParseInt(param, &node_id)) return "{\"error\":\"bad-node-id\"}";

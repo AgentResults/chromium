@@ -216,4 +216,23 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, ComputedStyleReadsValue) {
   EXPECT_NE(color.find("128"), std::string::npos) << "got: " << color;
 }
 
+// dom.node.scrollIntoView scrolls a below-the-fold node into view.
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, ScrollIntoViewScrolls) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<div style='height:3000px'></div>"
+           "<div id='bottom'>x</div>")));
+  auto ids = Dispatch("dom.query", "#bottom");
+  ASSERT_NE(ids, "[]");
+  std::string id = ids.substr(1, ids.find_first_of(",]") - 1);
+
+  // Starts at the top.
+  EXPECT_EQ(Dispatch("js.eval", "window.scrollY"), "0");
+
+  Dispatch("dom.node.scrollIntoView", id);
+
+  // Now scrolled down (the node was below the fold).
+  EXPECT_NE(Dispatch("js.eval", "window.scrollY"), "0");
+}
+
 }  // namespace aurelian
