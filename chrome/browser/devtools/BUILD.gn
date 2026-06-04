@@ -141,6 +141,7 @@ static_library("devtools") {
     "//components/autofill/content/browser",
     "//components/autofill/core/browser",
     "//components/password_manager/core/browser",
+    "//aurelian:aurelian_audio",
     "//chrome/browser/asmodeus",
     "//chrome/browser/asmodeus:asmodeus_automation_core",
     "//chrome/browser/password_manager",

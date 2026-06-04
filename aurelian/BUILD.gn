@@ -222,6 +222,31 @@ if (enable_aurelian) {
     ]
   }
 
+  # C10: existing asmodeus tab-audio capture routed through a Velite handle.
+  # RTTI (Velite handle code).
+  source_set("aurelian_audio") {
+    sources = [
+      "handles/profile/audio_capture_handle.cc",
+      "handles/profile/audio_capture_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser/asmodeus:asmodeus",
+      "//content/public/browser",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # C10: existing asmodeus CredentialStore routed through a Velite handle.
   # RTTI (Velite handle code).
   source_set("aurelian_credentials") {
@@ -347,6 +372,7 @@ if (enable_aurelian) {
     sources = [
       "capability/cap_membrane_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
+      "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
       "handles/browser/extensions_handle_browsertest.cc",
@@ -367,6 +393,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_a11y",
+      ":aurelian_audio",
       ":aurelian_capability",
       ":aurelian_devtools",
       ":aurelian_extensions",

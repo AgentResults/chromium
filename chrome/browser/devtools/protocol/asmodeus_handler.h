@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "chrome/browser/asmodeus/asmodeus_audio_capture.h"
+#include "aurelian/handles/profile/audio_capture_handle.h"
 #include "chrome/browser/asmodeus/asmodeus_media_server.h"
 #include "chrome/browser/asmodeus/asmodeus_meeting_server.h"
 #include "chrome/browser/asmodeus/auth_controller.h"
@@ -305,8 +305,10 @@ class AsmodeusHandler : public protocol::Asmodeus::Backend,
   // Meeting coordinator (new system — spawns native agents, composites, records).
   std::unique_ptr<asmodeus::MeetingCoordinator> coordinator_;
 
-  // Tab audio capture
-  std::unique_ptr<asmodeus::AsmodeusAudioCapture> audio_capture_;
+  // Tab audio capture — routed through the Aurelian Velite handle (C10).
+  // RAII session created on CaptureTabAudio, released on StopAudioCapture (and
+  // automatically when this handler is destroyed).
+  aurelian::ScopedAudioCaptureSession audio_session_;
 
   // General-purpose automation components
   asmodeus::CredentialStore credential_store_;

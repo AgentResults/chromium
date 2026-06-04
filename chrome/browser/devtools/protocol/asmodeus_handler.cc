@@ -144,6 +144,7 @@ AsmodeusHandler::AsmodeusHandler(protocol::UberDispatcher* dispatcher,
 }
 
 AsmodeusHandler::~AsmodeusHandler() {
+  // audio_session_ (RAII) releases any in-flight capture automatically.
   // PeerConnectionTrackerHostObserver auto-unregisters via its destructor.
   // Clean up all virtual audio devices registered by this handler.
   for (auto& [name, server] : media_servers_) {
@@ -1001,10 +1002,12 @@ DispatchResponse AsmodeusHandler::CaptureTabAudio(
   if (!web_contents_) {
     return DispatchResponse::ServerError("No web contents");
   }
-  audio_capture_ = std::make_unique<asmodeus::AsmodeusAudioCapture>();
+  audio_session_.reset(aurelian::CreateAudioCaptureHandle(web_contents_));
   int sr = in_sampleRate.value_or(48000);
   int ch = in_channels.value_or(1);
-  if (!audio_capture_->Start(web_contents_, in_outputPath, sr, ch)) {
+  if (!aurelian::AudioCaptureHandleStart(audio_session_.get(), in_outputPath,
+                                         sr, ch)) {
+    audio_session_.reset();
     return DispatchResponse::ServerError("Failed to start audio capture");
   }
   return DispatchResponse::Success();
@@ -1013,7 +1016,7 @@ DispatchResponse AsmodeusHandler::CaptureTabAudio(
 DispatchResponse AsmodeusHandler::StopAudioCapture(
     double* out_durationMs, int* out_samples,
     double* out_peakRms, String* out_outputPath) {
-  if (!audio_capture_ || !web_contents_) {
+  if (!audio_session_ || !web_contents_) {
     return DispatchResponse::ServerError("No active capture");
   }
 
@@ -1027,27 +1030,26 @@ DispatchResponse AsmodeusHandler::StopAudioCapture(
 
   // Return stats. Audio data stays in window.__asmodeusCapture.chunks
   // and can be read by the CDP client via Runtime.evaluate.
-  auto result = audio_capture_->Stop();
+  aurelian::AudioCaptureStats result =
+      aurelian::AudioCaptureHandleStop(audio_session_.get());
   *out_durationMs = result.duration_ms;
   *out_samples = static_cast<int>(result.samples);
   *out_peakRms = result.peak_rms;
   *out_outputPath = result.output_path;
-  audio_capture_.reset();
+  audio_session_.reset();
   return DispatchResponse::Success();
 }
 
 DispatchResponse AsmodeusHandler::GetAudioLevel(
     double* out_rms, double* out_peak, bool* out_capturing) {
-  if (!audio_capture_) {
+  if (!audio_session_) {
     *out_rms = 0;
     *out_peak = 0;
     *out_capturing = false;
     return DispatchResponse::Success();
   }
-  auto level = audio_capture_->GetLevel();
-  *out_rms = level.rms;
-  *out_peak = level.peak;
-  *out_capturing = level.capturing;
+  aurelian::AudioCaptureHandleLevel(audio_session_.get(), out_rms, out_peak,
+                                    out_capturing);
   return DispatchResponse::Success();
 }
 
