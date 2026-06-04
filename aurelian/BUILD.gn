@@ -87,6 +87,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # Emulation: user-agent override (C11.a). No RTTI.
+  source_set("aurelian_emulation") {
+    sources = [
+      "handles/browser/emulation_handle.cc",
+      "handles/browser/emulation_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//third_party/blink/public/common",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Extensions list / enable / disable (C7.b). No RTTI.
   source_set("aurelian_extensions") {
     sources = [
@@ -397,6 +416,7 @@ if (enable_aurelian) {
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
+      "handles/browser/emulation_handle_browsertest.cc",
       "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
       "handles/browser/permissions_handle_browsertest.cc",
@@ -418,6 +438,7 @@ if (enable_aurelian) {
       ":aurelian_audio",
       ":aurelian_capability",
       ":aurelian_devtools",
+      ":aurelian_emulation",
       ":aurelian_extensions",
       ":aurelian_federation",
       ":aurelian_handles",
