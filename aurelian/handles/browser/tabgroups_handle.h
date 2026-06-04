@@ -24,6 +24,9 @@ std::string GroupOfTab(TabStripModel* model, int index);
 // Removes the tab at `index` from its group. Returns false if it wasn't grouped.
 bool UngroupTab(TabStripModel* model, int index);
 
+// Lists the id strings of all tab groups in the strip. UI thread.
+std::vector<std::string> ListGroups(TabStripModel* model);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_TABGROUPS_HANDLE_H_

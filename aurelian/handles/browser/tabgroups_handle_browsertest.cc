@@ -44,4 +44,19 @@ IN_PROC_BROWSER_TEST_F(AurelianTabGroupsBrowserTest, GroupQueryUngroup) {
   EXPECT_FALSE(UngroupTab(Model(), 0));
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianTabGroupsBrowserTest, ListsGroups) {
+  chrome::AddTabAt(browser(), GURL("about:blank"), -1, /*foreground=*/true);
+  ASSERT_GE(Model()->count(), 2);
+
+  // No groups yet.
+  EXPECT_TRUE(ListGroups(Model()).empty());
+
+  std::string gid = GroupTabs(Model(), {0, 1});
+  ASSERT_FALSE(gid.empty());
+
+  std::vector<std::string> groups = ListGroups(Model());
+  ASSERT_EQ(groups.size(), 1u);
+  EXPECT_EQ(groups[0], gid);
+}
+
 }  // namespace aurelian
