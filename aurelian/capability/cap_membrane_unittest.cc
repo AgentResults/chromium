@@ -94,5 +94,47 @@ TEST(AurelianCapMembraneTest, NestedDomainChainEnforced) {
             std::string::npos);
 }
 
+// The browser membrane classifies browser-verb mutation-ness itself and then
+// enforces the cap (so callers need not pass is_mutating).
+TEST(AurelianCapMembraneTest, BrowserVerbEnforcement) {
+  PrivKey anchor = Seed(11);
+  PrivKey chromium = Seed(12);
+  PubKey anchor_pub = PubFromPriv(anchor);
+
+  // A read-only cap delegated to the Chromium domain.
+  std::vector<CapLink> read_chain = {
+      Mint("g", "", "mode=read", anchor, PubFromPriv(chromium))};
+
+  // Read verbs pass; write verbs are denied with mode-read.
+  EXPECT_EQ(CheckBrowserCap(read_chain, anchor_pub, true, "cookies.get",
+                            "legion://chrome/profile/cookies", 1000),
+            "");
+  EXPECT_EQ(CheckBrowserCap(read_chain, anchor_pub, true, "tabs.list",
+                            "legion://chrome/browser/tabs", 1000),
+            "");
+  EXPECT_NE(CheckBrowserCap(read_chain, anchor_pub, true, "cookies.set",
+                            "legion://chrome/profile/cookies", 1000)
+                .find("mode-read"),
+            std::string::npos);
+  EXPECT_NE(CheckBrowserCap(read_chain, anchor_pub, true, "navigation.loadUrl",
+                            "legion://chrome/browser/tabs/1", 1000)
+                .find("mode-read"),
+            std::string::npos);
+
+  // A write cap permits the write verbs.
+  std::vector<CapLink> write_chain = {
+      Mint("g", "", "mode=write", anchor, PubFromPriv(chromium))};
+  EXPECT_EQ(CheckBrowserCap(write_chain, anchor_pub, true, "cookies.set",
+                            "legion://chrome/profile/cookies", 1000),
+            "");
+
+  // An unverified chain is rejected regardless of verb.
+  PubKey other = PubFromPriv(Seed(99));
+  EXPECT_NE(CheckBrowserCap(read_chain, other, true, "cookies.get",
+                            "legion://chrome/profile/cookies", 1000)
+                .find("cap-untrusted-anchor"),
+            std::string::npos);
+}
+
 }  // namespace
 }  // namespace aurelian

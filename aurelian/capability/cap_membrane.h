@@ -30,6 +30,17 @@ std::string EnforceCap(const std::vector<CapLink>& chain,
                        const std::string& target,
                        int64_t now_unix);
 
+// The BROWSER membrane's cap check (parallel to the renderer membrane's): it
+// classifies a browser-process verb's mutation-ness (e.g. cookies.set,
+// navigation.loadUrl, tabs.close are writes; cookies.get, tabs.list are reads)
+// and then EnforceCap()s the cap. Returns "" if permitted, else a broken reason.
+std::string CheckBrowserCap(const std::vector<CapLink>& chain,
+                            const PubKey& trusted_anchor,
+                            bool has_anchor,
+                            const std::string& verb,
+                            const std::string& target,
+                            int64_t now_unix);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_CAPABILITY_CAP_MEMBRANE_H_
