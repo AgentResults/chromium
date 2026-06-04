@@ -201,6 +201,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # Frame tree listing (C2.x). No RTTI.
+  source_set("aurelian_frames") {
+    sources = [
+      "handles/browser/frames_handle.cc",
+      "handles/browser/frames_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Navigation history list (C1.z). No RTTI.
   source_set("aurelian_nav_history") {
     sources = [
@@ -633,6 +652,7 @@ if (enable_aurelian) {
       "handles/browser/permissions_handle_browsertest.cc",
       "handles/browser/process_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
+      "handles/browser/frames_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/nav_history_handle_browsertest.cc",
       "handles/browser/page_info_handle_browsertest.cc",
@@ -663,6 +683,7 @@ if (enable_aurelian) {
       ":aurelian_emulation",
       ":aurelian_extensions",
       ":aurelian_federation",
+      ":aurelian_frames",
       ":aurelian_handles",
       ":aurelian_nav_history",
       ":aurelian_network",
