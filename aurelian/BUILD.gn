@@ -201,6 +201,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # Browsing history query (C13.e). No RTTI.
+  source_set("aurelian_history") {
+    sources = [
+      "handles/browser/history_handle.cc",
+      "handles/browser/history_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/history/core/browser",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Frame tree listing (C2.x). No RTTI.
   source_set("aurelian_frames") {
     sources = [
@@ -653,6 +672,7 @@ if (enable_aurelian) {
       "handles/browser/process_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/frames_handle_browsertest.cc",
+      "handles/browser/history_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/nav_history_handle_browsertest.cc",
       "handles/browser/page_info_handle_browsertest.cc",
@@ -685,6 +705,7 @@ if (enable_aurelian) {
       ":aurelian_federation",
       ":aurelian_frames",
       ":aurelian_handles",
+      ":aurelian_history",
       ":aurelian_nav_history",
       ":aurelian_network",
       ":aurelian_page_info",
@@ -707,6 +728,9 @@ if (enable_aurelian) {
       "//components/bookmarks/test",
       "//components/content_settings/core/browser",
       "//components/download/public/common:public",
+      "//components/history/core/browser",
+      "//components/history/core/test",
+      "//components/keyed_service/core",
       "//content/public/browser",
       "//content/test:test_support",
       "//extensions/browser",
