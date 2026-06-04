@@ -379,7 +379,13 @@ source_set("velite_wire") {
     "$_velite_src/agentspaces-wire/src/capability_handle.cpp",
     "$_velite_src/agentspaces-wire/src/component_instance_handle.cpp",
     "$_velite_src/agentspaces-wire/src/component_registry_handle.cpp",
-    "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
+    # TEMP-WORKAROUND (2026-06-04): conformance_bootstrap.cpp is excluded — an
+    # upstream Velite refactor left it referencing kg_handle_concrete_ (a member
+    # declared only under #ifdef LEGION_HAS_FEDERATED_KG) OUTSIDE that guard, so
+    # it fails to compile in this (flag-off) embedded build. Aurelian does not
+    # use ConformanceBootstrap (it mounts its own root handle), so dropping it is
+    # safe. Restore once the upstream guard mismatch is fixed.
+    # "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
     "$_velite_src/agentspaces-wire/src/datastore_handle.cpp",
     "$_velite_src/agentspaces-wire/src/dispatcher.cpp",
     "$_velite_src/agentspaces-wire/src/fact_handle.cpp",
