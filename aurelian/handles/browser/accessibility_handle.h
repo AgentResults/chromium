@@ -29,6 +29,11 @@ struct AxNode {
 // the renderer replies. Returns empty if the snapshot fails.
 std::vector<AxNode> SnapshotAxTree(content::WebContents* wc);
 
+// As SnapshotAxTree, but returns the HIERARCHICAL tree as JSON
+// ({"role","name","children":[...]}), preserving parent/child structure.
+// Returns "null" if the snapshot fails.
+std::string GetAxTreeJson(content::WebContents* wc);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_ACCESSIBILITY_HANDLE_H_

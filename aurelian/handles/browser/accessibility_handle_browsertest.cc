@@ -43,4 +43,15 @@ IN_PROC_BROWSER_TEST_F(AurelianA11yBrowserTest, TreeReflectsPage) {
   EXPECT_TRUE(found_link) << "expected a link node named 'a link'";
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianA11yBrowserTest, TreeJsonIsHierarchical) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<button>Hi A11y</button>")));
+
+  std::string json = GetAxTreeJson(GetWC());
+  // A nested tree (a root with a children array) carrying the button + name.
+  EXPECT_NE(json.find("\"children\""), std::string::npos) << json;
+  EXPECT_NE(json.find("\"role\":\"button\""), std::string::npos) << json;
+  EXPECT_NE(json.find("Hi A11y"), std::string::npos) << json;
+}
+
 }  // namespace aurelian
