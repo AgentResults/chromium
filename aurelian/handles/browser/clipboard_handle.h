@@ -17,6 +17,10 @@ void WriteClipboardText(const std::string& text);
 // Reads plain text from the copy/paste clipboard ("" if none). UI thread.
 std::string ReadClipboardText();
 
+// Writes / reads HTML markup to the copy/paste clipboard. UI thread.
+void WriteClipboardHtml(const std::string& html);
+std::string ReadClipboardHtml();
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_CLIPBOARD_HANDLE_H_

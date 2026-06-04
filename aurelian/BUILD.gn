@@ -286,6 +286,7 @@ if (enable_aurelian) {
     deps = [
       "//base",
       "//ui/base/clipboard",
+      "//url",
     ]
 
     configs -= [

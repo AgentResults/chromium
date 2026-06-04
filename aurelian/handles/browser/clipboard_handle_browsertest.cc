@@ -36,4 +36,10 @@ IN_PROC_BROWSER_TEST_F(AurelianClipboardBrowserTest, WriteRead) {
   EXPECT_EQ(ReadClipboardText(), "second");
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianClipboardBrowserTest, WriteReadHtml) {
+  WriteClipboardHtml("<b>aurelian-html</b>");
+  EXPECT_NE(ReadClipboardHtml().find("<b>aurelian-html</b>"),
+            std::string::npos);
+}
+
 }  // namespace aurelian
