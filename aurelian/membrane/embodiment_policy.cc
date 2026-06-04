@@ -26,7 +26,7 @@ EmbodimentPolicy EmbodimentPolicy::WithCapabilities(
 EmbodimentPolicy EmbodimentPolicy::FullStandalone() {
   // The capabilities the legion://chrome/ root mounts as children. Kept in
   // sync with ChromeRootHandle's mountable set (root_handle.cc).
-  return WithCapabilities({"system", "tabs", "gpu"});
+  return WithCapabilities({"system", "tabs", "gpu", "media"});
 }
 
 bool EmbodimentPolicy::Allows(const std::string& name) const {

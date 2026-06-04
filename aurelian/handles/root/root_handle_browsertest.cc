@@ -8,6 +8,7 @@
 #include "aurelian/handles/root/root_handle.h"
 
 #include "aurelian/handles/browser/gpu_handle.h"
+#include "aurelian/membrane/embodiment_policy.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -71,6 +72,47 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToGpuCapability) {
   std::string info = RootDispatch(root, "gpu/info");
   EXPECT_NE(info.find("\"glRenderer\":"), std::string::npos) << info;
   EXPECT_NE(info.find(GetGpuSummary().gl_renderer), std::string::npos) << info;
+
+  DestroyChromeRoot(root);
+}
+
+// C-MEDIA-1b: the bindable media surface is reachable through the install-sealed
+// root — the Cicero endowment binds to legion://chrome/media/{camera,mic,
+// peer-audio}. RED before the root mounts `media` (out-of-scope); GREEN once the
+// policy grants it and the root returns the persistent MediaHandle.
+IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToMediaSurface) {
+  ChromeRoot* root = CreateChromeRoot();  // FullStandalone seals in `media`.
+  ASSERT_NE(root, nullptr);
+
+  // The media surface answers its identity through the sealed root.
+  EXPECT_EQ(RootDispatch(root, "media/__getIdentity"), "legion://chrome/media");
+
+  // Walk root -> media -> {camera,mic,peer-audio} -> describe: each advertises
+  // its endowment contract (the bindable surface for Cicero §26).
+  EXPECT_NE(RootDispatch(root, "media/camera/describe").find("video_sink"),
+            std::string::npos)
+      << RootDispatch(root, "media/camera/describe");
+  EXPECT_NE(RootDispatch(root, "media/mic/describe").find("audio_sink"),
+            std::string::npos)
+      << RootDispatch(root, "media/mic/describe");
+  EXPECT_NE(
+      RootDispatch(root, "media/peer-audio/describe").find("audio_source"),
+      std::string::npos)
+      << RootDispatch(root, "media/peer-audio/describe");
+
+  DestroyChromeRoot(root);
+}
+
+// The seal holds: a root whose policy does NOT grant `media` refuses it (no
+// ambient media surface leaks to an unauthorised membrane).
+IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, MediaSurfaceSealedOff) {
+  ChromeRoot* root =
+      CreateChromeRootWithPolicy(EmbodimentPolicy::WithCapabilities({"system"}));
+  ASSERT_NE(root, nullptr);
+
+  EXPECT_NE(RootDispatch(root, "media").find("broken"), std::string::npos);
+  EXPECT_NE(RootDispatch(root, "media/camera/describe").find("broken"),
+            std::string::npos);
 
   DestroyChromeRoot(root);
 }

@@ -154,6 +154,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
+      ":aurelian_media",
       ":aurelian_system",
       ":aurelian_tabs_overview",
       "//base",

@@ -11,6 +11,8 @@
 #include "aurelian/handles/browser/gpu_handle.h"
 #include "aurelian/handles/browser/system_handle.h"
 #include "aurelian/handles/browser/tabs_overview.h"
+#include "aurelian/handles/media/media_handles.h"
+#include "aurelian/handles/media/media_seam.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
@@ -136,7 +138,15 @@ class TabsOverviewHandle : public Handle {
 class ChromeRootHandle : public Handle {
  public:
   explicit ChromeRootHandle(EmbodimentPolicy policy)
-      : policy_(std::move(policy)) {}
+      : policy_(std::move(policy)) {
+    // The media surface holds state (buffered frames, peer-audio
+    // subscriptions) so it MUST be a persistent child, not minted fresh per
+    // ask. Wired to the process-global MediaSeam the content-layer capture
+    // device reads. Created only when the seal grants `media`.
+    if (policy_.Allows("media")) {
+      media_ = CreateMediaHandle(&MediaSeam::Get());
+    }
+  }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
   const Value& resolved_value() const override { return identity_; }
@@ -161,6 +171,12 @@ class ChromeRootHandle : public Handle {
     // Capability mounts — gated by the policy. A mountable name the policy
     // does not grant resolves broken("out-of-scope"); no ambient state leaks.
     const std::string name(msg);
+    if (name == "media") {
+      if (!policy_.Allows("media") || !media_) {
+        return ValueHandle::make_broken("out-of-scope");
+      }
+      return media_;
+    }
     if (name == "system" || name == "tabs" || name == "gpu") {
       if (!policy_.Allows(name)) {
         return ValueHandle::make_broken("out-of-scope");
@@ -190,6 +206,8 @@ class ChromeRootHandle : public Handle {
  private:
   Value identity_{std::string("legion://chrome/")};
   EmbodimentPolicy policy_;
+  // Persistent media surface (legion://chrome/media), or null when unsealed.
+  std::shared_ptr<Handle> media_;
 };
 
 // Serializes a settled handle's reply to a compact string. Objects emit a
