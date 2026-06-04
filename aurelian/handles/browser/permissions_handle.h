@@ -28,6 +28,12 @@ bool RevokePermission(HostContentSettingsMap* map,
                       const std::string& origin,
                       const std::string& permission);
 
+// Resets a permission for an origin back to its default (clears any
+// grant/revoke). Returns false if the permission name isn't recognised.
+bool ResetPermission(HostContentSettingsMap* map,
+                     const std::string& origin,
+                     const std::string& permission);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_PERMISSIONS_HANDLE_H_

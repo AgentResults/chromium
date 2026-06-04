@@ -71,4 +71,10 @@ bool RevokePermission(HostContentSettingsMap* map,
   return SetPermission(map, origin, permission, CONTENT_SETTING_BLOCK);
 }
 
+bool ResetPermission(HostContentSettingsMap* map,
+                     const std::string& origin,
+                     const std::string& permission) {
+  return SetPermission(map, origin, permission, CONTENT_SETTING_DEFAULT);
+}
+
 }  // namespace aurelian

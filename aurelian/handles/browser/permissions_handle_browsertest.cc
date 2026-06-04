@@ -47,4 +47,18 @@ IN_PROC_BROWSER_TEST_F(AurelianPermBrowserTest, QueryGrantRevoke) {
   EXPECT_FALSE(GrantPermission(Map(), origin, "telepathy"));
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianPermBrowserTest, ResetToDefault) {
+  const std::string origin = "https://reset.example.com";
+
+  // Grant, then reset back to the default ("ask" for geolocation).
+  EXPECT_TRUE(GrantPermission(Map(), origin, "geolocation"));
+  EXPECT_EQ(QueryPermission(Map(), origin, "geolocation"), "allow");
+
+  EXPECT_TRUE(ResetPermission(Map(), origin, "geolocation"));
+  EXPECT_EQ(QueryPermission(Map(), origin, "geolocation"), "ask");
+
+  // Unknown permission cannot be reset.
+  EXPECT_FALSE(ResetPermission(Map(), origin, "telepathy"));
+}
+
 }  // namespace aurelian
