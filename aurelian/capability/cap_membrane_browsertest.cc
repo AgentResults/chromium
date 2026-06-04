@@ -10,7 +10,10 @@
 #include "aurelian/capability/cap_wire.h"
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
 
+#include <cstdlib>
+
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -201,6 +204,61 @@ IN_PROC_BROWSER_TEST_F(AurelianCapBrowserTest, WrongAnchorRejected) {
   std::vector<CapLink> chain = Grant("mode=write", 0);
   std::string reply = DispatchWithCap(&wire, chain, "dom.node.text", node);
   EXPECT_NE(reply.find("cap-untrusted-anchor"), std::string::npos) << reply;
+}
+
+// AU-CAP-LIVE — the operator anchor is provisioned at BOOT (env
+// AURELIAN_CAP_ANCHOR, what Agrippa publishes), NOT by a manual ProvisionAnchor,
+// so the already-real cap crypto actually runs in production. A cap signed by the
+// matching operator key is ENFORCED; a forged chain rooted at a different key is
+// REFUSED. RED before CapAnchorProvisioner is wired into boot (no anchor ->
+// every op is cap-untrusted-anchor).
+class AurelianCapBootAnchorBrowserTest : public AurelianCapBrowserTest {
+ protected:
+  void SetUpInProcessBrowserTestFixture() override {
+    AurelianCapBrowserTest::SetUpInProcessBrowserTestFixture();
+    // Publish the operator anchor BEFORE the browser process boots.
+    PrivKey anchor;
+    anchor.fill(7);  // matches AurelianCapBrowserTest::anchor_
+    PubKey pub = PubFromPriv(anchor);
+    ::setenv("AURELIAN_CAP_ANCHOR", base::HexEncode(pub).c_str(),
+             /*overwrite=*/1);
+  }
+  void TearDownInProcessBrowserTestFixture() override {
+    ::unsetenv("AURELIAN_CAP_ANCHOR");
+    AurelianCapBrowserTest::TearDownInProcessBrowserTestFixture();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(AurelianCapBootAnchorBrowserTest,
+                       BootAnchorEnforcesSignedCapAndRefusesForgery) {
+  Navigate();
+  mojo::AssociatedRemote<mojom::AurelianWire> wire;
+  GetWire(&wire);  // NO ProvisionAnchor — the boot provisioner did it.
+
+  std::string node = QueryFirstNodeId(&wire);
+  ASSERT_FALSE(node.empty());
+
+  // A cap signed by the boot-provisioned operator anchor verifies, so the read
+  // is permitted (NOT refused as cap-untrusted-anchor).
+  std::vector<CapLink> good = Grant("mode=read", /*expires=*/0);
+  std::string ok = DispatchWithCap(&wire, good, "dom.node.text", node);
+  EXPECT_EQ(ok.find("cap-untrusted-anchor"), std::string::npos)
+      << "boot anchor must make the operator-signed cap verify live: " << ok;
+  EXPECT_NE(ok.find("cap target"), std::string::npos) << ok;
+
+  // A chain rooted at a DIFFERENT key is refused by the live boot anchor.
+  PrivKey forger;
+  forger.fill(9);
+  CapLink forged;
+  forged.cap_id = "root";
+  forged.predicate = "mode=read";
+  forged.expires = 0;
+  forged.issuer_pub = PubFromPriv(forger);
+  forged.subject_pub = machine_pub_;
+  ASSERT_TRUE(SignLink(&forged, forger));
+  std::string bad = DispatchWithCap(&wire, {forged}, "dom.node.text", node);
+  EXPECT_NE(bad.find("cap-untrusted-anchor"), std::string::npos)
+      << "a chain not rooted at the boot anchor must be refused: " << bad;
 }
 
 }  // namespace aurelian

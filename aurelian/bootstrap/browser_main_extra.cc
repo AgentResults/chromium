@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "aurelian/capability/cap_anchor_provisioner.h"
 #include "aurelian/federation/uds_register.h"
 #include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
@@ -21,6 +22,7 @@
 #include "aurelian/membrane/install.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -48,6 +50,19 @@ std::string ResolveAgrippaSock() {
   }
   const char* home = std::getenv("HOME");
   return std::string(home ? home : "/tmp") + "/.legion/agrippa.sock";
+}
+
+// The operator/machine cap trust anchor (32-byte Ed25519 pub) the spawning
+// Agrippa publishes to this embodiment, hex-encoded. Pure data the app reads but
+// does NOT branch on — the benign connectivity carveout (like a key path). Empty
+// / malformed => no anchor provisioned (the membrane stays fail-closed).
+std::vector<uint8_t> ResolveCapAnchor() {
+  const char* hex = std::getenv("AURELIAN_CAP_ANCHOR");
+  std::vector<uint8_t> bytes;
+  if (hex && *hex) {
+    base::HexStringToBytes(hex, &bytes);
+  }
+  return bytes;
 }
 
 }  // namespace
@@ -79,6 +94,12 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   std::map<content::WebContents*, std::unique_ptr<TabHandleImpl>> tab_impls;
   // wc -> tab_id mapping
   std::map<content::WebContents*, int64_t> wc_ids;
+  // AU-CAP-LIVE — the operator cap trust anchor + a per-WebContents provisioner
+  // that pushes it onto each renderer frame's membrane (so the real cap crypto
+  // actually runs in production instead of fail-closing to cap-untrusted-anchor).
+  std::vector<uint8_t> cap_anchor;
+  std::map<content::WebContents*, std::unique_ptr<CapAnchorProvisioner>>
+      cap_provisioners;
 
   ~BrowserMainExtraImpl() override {
     BrowserList::RemoveObserver(this);
@@ -115,6 +136,12 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
     int64_t id = NextTabId();
     wc_ids[wc] = id;
     tab_impls[wc] = CreateTabHandle(wc, id);
+    // AU-CAP-LIVE — provision the operator anchor onto this tab's renderer
+    // frames as they are created. A 32-byte anchor was published at boot.
+    if (cap_anchor.size() == 32) {
+      cap_provisioners[wc] =
+          std::make_unique<CapAnchorProvisioner>(wc, cap_anchor);
+    }
   }
 
   void UnmountTab(content::WebContents* wc) {
@@ -123,6 +150,7 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
       DestroyTabHandle(std::move(it->second));
       tab_impls.erase(it);
     }
+    cap_provisioners.erase(wc);
     wc_ids.erase(wc);
   }
 
@@ -164,6 +192,10 @@ BrowserMainExtra::~BrowserMainExtra() = default;
 
 void BrowserMainExtra::PostCreateThreads() {
   impl_ = std::make_unique<BrowserMainExtraImpl>();
+
+  // AU-CAP-LIVE — read the operator cap trust anchor Agrippa published, so the
+  // per-tab CapAnchorProvisioner can push it onto renderer membranes at mount.
+  impl_->cap_anchor = ResolveCapAnchor();
 
   // 1. Create the browser-process AgentSpace (the membrane carrier).
   impl_->actor_space =

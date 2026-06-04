@@ -615,6 +615,29 @@ if (enable_aurelian) {
     ]
   }
 
+  # AU-CAP-LIVE: provisions the operator cap trust anchor onto each renderer
+  # frame's membrane at boot (the live half of C8). No RTTI; talks the
+  # AurelianWire mojom to the renderer.
+  source_set("aurelian_cap_anchor_provisioner") {
+    sources = [
+      "capability/cap_anchor_provisioner.cc",
+      "capability/cap_anchor_provisioner.h",
+    ]
+
+    deps = [
+      "//aurelian/public/mojom",
+      "//base",
+      "//content/public/browser",
+      "//mojo/public/cpp/bindings",
+      "//third_party/blink/public/common",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Cap-gated browser ops (C8.g): the browser membrane guards a real Chromium
   # subsystem call. No RTTI; bridges the cap layer + the network handle.
   source_set("aurelian_cap_browser") {
@@ -851,6 +874,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_cap_anchor_provisioner",
       ":aurelian_embodiment_policy",
       ":aurelian_handles",
       ":aurelian_install",
