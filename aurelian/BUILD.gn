@@ -201,6 +201,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # Navigation history list (C1.z). No RTTI.
+  source_set("aurelian_nav_history") {
+    sources = [
+      "handles/browser/nav_history_handle.cc",
+      "handles/browser/nav_history_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//url",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Per-tab process info (C12.a). No RTTI.
   source_set("aurelian_process") {
     sources = [
@@ -615,6 +634,7 @@ if (enable_aurelian) {
       "handles/browser/process_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
+      "handles/browser/nav_history_handle_browsertest.cc",
       "handles/browser/page_info_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/profile_handle_browsertest.cc",
@@ -644,6 +664,7 @@ if (enable_aurelian) {
       ":aurelian_extensions",
       ":aurelian_federation",
       ":aurelian_handles",
+      ":aurelian_nav_history",
       ":aurelian_network",
       ":aurelian_page_info",
       ":aurelian_permissions",
