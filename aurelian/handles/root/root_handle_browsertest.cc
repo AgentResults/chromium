@@ -7,6 +7,7 @@
 
 #include "aurelian/handles/root/root_handle.h"
 
+#include "aurelian/handles/browser/gpu_handle.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -57,6 +58,19 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToTabsCapability) {
   // The active tab's URL is reachable too and reflects where we navigated.
   std::string active = RootDispatch(root, "tabs/activeUrl");
   EXPECT_NE(active.find("data:text/html"), std::string::npos) << active;
+
+  DestroyChromeRoot(root);
+}
+
+IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToGpuCapability) {
+  ChromeRoot* root = CreateChromeRoot();
+  ASSERT_NE(root, nullptr);
+
+  // Walk root -> gpu -> info, reaching the REAL GpuDataManager: the serialized
+  // GL renderer matches an independent read (so it holds on any GPU).
+  std::string info = RootDispatch(root, "gpu/info");
+  EXPECT_NE(info.find("\"glRenderer\":"), std::string::npos) << info;
+  EXPECT_NE(info.find(GetGpuSummary().gl_renderer), std::string::npos) << info;
 
   DestroyChromeRoot(root);
 }

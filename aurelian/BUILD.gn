@@ -136,6 +136,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_gpu",
       ":aurelian_system",
       ":aurelian_tabs_overview",
       "//base",
@@ -162,6 +163,25 @@ if (enable_aurelian) {
     deps = [
       "//base",
       "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # GPU info: active device + GL strings from GpuDataManager (C15.b). No RTTI.
+  source_set("aurelian_gpu") {
+    sources = [
+      "handles/browser/gpu_handle.cc",
+      "handles/browser/gpu_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//gpu/config",
     ]
 
     configs -= [
@@ -745,6 +765,7 @@ if (enable_aurelian) {
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/nav_history_handle_browsertest.cc",
       "handles/browser/page_info_handle_browsertest.cc",
+      "handles/browser/gpu_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/profile_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
@@ -781,6 +802,7 @@ if (enable_aurelian) {
       ":aurelian_network",
       ":aurelian_page_info",
       ":aurelian_permissions",
+      ":aurelian_gpu",
       ":aurelian_process",
       ":aurelian_profile",
       ":aurelian_root",

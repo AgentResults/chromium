@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "aurelian/handles/browser/gpu_handle.h"
 #include "aurelian/handles/browser/system_handle.h"
 #include "aurelian/handles/browser/tabs_overview.h"
 #include "base/strings/string_split.h"
@@ -54,6 +55,39 @@ class SystemInfoHandle : public Handle {
 
  private:
   Value identity_{std::string("legion://chrome/system")};
+};
+
+// legion://chrome/gpu — the browser's collected GPU info, reached from the
+// root (global query, no Browser* held).
+class GpuInfoHandle : public Handle {
+ public:
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const Value& resolved_value() const override { return identity_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return "legion://chrome/gpu"; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const Value& /*spec*/) override {
+    if (msg == "__getIdentity") {
+      return ValueHandle::make(Value(std::string("legion://chrome/gpu")));
+    }
+    if (msg == "info") {
+      GpuSummary gpu = GetGpuSummary();
+      return ValueHandle::make(Value::make_object({
+          {"vendorId", Value(static_cast<int>(gpu.vendor_id))},
+          {"deviceId", Value(static_cast<int>(gpu.device_id))},
+          {"glVendor", Value(gpu.gl_vendor)},
+          {"glRenderer", Value(gpu.gl_renderer)},
+      }));
+    }
+    return ValueHandle::make_broken("not-callable");
+  }
+
+  void tell(std::string_view, const Value&) override {}
+
+ private:
+  Value identity_{std::string("legion://chrome/gpu")};
 };
 
 // legion://chrome/tabs — the live, browser-wide tab strip reached from the
@@ -114,6 +148,9 @@ class ChromeRootHandle : public Handle {
     }
     if (msg == "tabs") {
       return std::make_shared<TabsOverviewHandle>();
+    }
+    if (msg == "gpu") {
+      return std::make_shared<GpuInfoHandle>();
     }
     return ValueHandle::make_broken("not-callable");
   }
