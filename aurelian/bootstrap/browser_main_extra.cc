@@ -15,6 +15,7 @@
 #include "aurelian/federation/uds_register.h"
 #include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
+#include "aurelian/media/aurelian_virtual_camera.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
 #include "base/functional/bind.h"
@@ -64,6 +65,10 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   // C9 — the machine-federation register-in (dials Agrippa's UDS, registers the
   // `chrome` facet; no inbound port). Stopped on teardown (dtor → Stop()).
   std::unique_ptr<UdsRegister> uds_register;
+  // C-MEDIA-2c — the avatar virtual camera, registered with the video capture
+  // service at boot and pumping frames live from MediaSeam (which Cicero's
+  // video_sink fills). Destroyed on teardown (drops the device pipes).
+  std::unique_ptr<AurelianVirtualCamera> virtual_camera;
 
   // tab_id -> impl (owned here; registry in tab_handle.cc mirrors)
   std::map<content::WebContents*, std::unique_ptr<TabHandleImpl>> tab_impls;
@@ -225,7 +230,13 @@ void BrowserMainExtra::PreBrowserStart() {
 }
 
 void BrowserMainExtra::PostBrowserStart() {
-  // Self-tests ripped in C3.5 — now in *_browsertest.cc files.
+  // C-MEDIA-2c — register the avatar virtual camera with the real video capture
+  // service at boot + start its frame pump. From here a page's getUserMedia (or
+  // a Meet join) opening the camera receives the avatar frames Cicero's
+  // video_sink writes into MediaSeam. The browser loop is running now, so the
+  // pump timer + mojo remotes have a live UI-thread sequence.
+  impl_->virtual_camera = std::make_unique<AurelianVirtualCamera>();
+  impl_->virtual_camera->Start();
 }
 
 void BrowserMainExtra::PostMainMessageLoopRun() {

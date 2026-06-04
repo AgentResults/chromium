@@ -836,6 +836,7 @@ if (enable_aurelian) {
       ":aurelian_install",
       ":aurelian_root",
       ":aurelian_uds_register",
+      ":aurelian_virtual_camera",
       "//base",
       "//chrome/browser:main_extra_parts",
       "//chrome/browser/ui",

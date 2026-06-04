@@ -132,22 +132,15 @@ class AurelianVirtualCameraBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(AurelianVirtualCameraBrowserTest,
                        AvatarAppearsAsEnumerableCamera) {
-  // A real (localhost = secure-context) page.
+  // The browser has booted; PostBrowserStart registered the avatar virtual
+  // camera with the video capture service. A real (localhost = secure-context)
+  // page enumerates exactly one videoinput — the boot-registered Aurelian camera
+  // (fake hardware cameras are off). RED if boot did not wire the camera (0).
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/cam.html")));
   content::WebContents* wc =
       browser()->tab_strip_model()->GetActiveWebContents();
 
-  // Before registration the page sees zero cameras.
-  EXPECT_EQ(0, content::EvalJs(wc, kCountVideoInputs));
-
-  // Register the Aurelian avatar device with the real video capture service.
-  AurelianVirtualCamera camera;
-  camera.Start();
-  ASSERT_TRUE(camera.registered());
-  camera.FlushForTesting();
-
-  // The page now enumerates exactly one videoinput: the Aurelian camera.
   EXPECT_EQ(1, content::EvalJs(wc, kCountVideoInputs));
 }
 
@@ -162,18 +155,14 @@ IN_PROC_BROWSER_TEST_F(AurelianVirtualCameraBrowserTest,
   content::WebContents* wc =
       browser()->tab_strip_model()->GetActiveWebContents();
 
-  // The avatar paints a bright frame (luma 220) into the seam BEFORE the camera
-  // starts, so the very first pumped frame already carries it.
+  // Cicero's video_sink paints a bright avatar frame (luma 220) into the seam;
+  // the boot-registered camera's pump pulls it.
   MediaSeam::Get().PushVideoFrame(
       {640, 480, "I420", MakeI420Frame(/*luma=*/220), /*ts_micros=*/0});
 
-  AurelianVirtualCamera camera;
-  camera.Start();
-  ASSERT_TRUE(camera.registered());
-
-  // getUserMedia opens the Aurelian camera; the rendered centre pixel is bright
-  // (the avatar luma), not black/absent. Threshold 150 separates the avatar
-  // (~220) from the neutral-gray fallback (128) and from no-frame (-1).
+  // getUserMedia opens the boot-registered Aurelian camera; the rendered centre
+  // pixel is bright (the avatar luma), not black/absent. Threshold 150 separates
+  // the avatar (~220) from the neutral-gray fallback (128) and no-frame (-1).
   int brightness = content::EvalJs(wc, kAvgBrightnessOfFirstFrame).ExtractInt();
   EXPECT_GT(brightness, 150) << "rendered camera brightness = " << brightness;
 }
