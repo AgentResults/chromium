@@ -239,6 +239,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # JS dialogs: respond to a pending dialog (C11.b). No RTTI.
+  source_set("aurelian_dialogs") {
+    sources = [
+      "handles/browser/dialogs_handle.cc",
+      "handles/browser/dialogs_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/javascript_dialogs",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Emulation: user-agent override (C11.a). No RTTI.
   source_set("aurelian_emulation") {
     sources = [
@@ -570,6 +589,7 @@ if (enable_aurelian) {
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
+      "handles/browser/dialogs_handle_browsertest.cc",
       "handles/browser/emulation_handle_browsertest.cc",
       "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
@@ -600,6 +620,7 @@ if (enable_aurelian) {
       ":aurelian_clipboard",
       ":aurelian_capability",
       ":aurelian_devtools",
+      ":aurelian_dialogs",
       ":aurelian_emulation",
       ":aurelian_extensions",
       ":aurelian_federation",
