@@ -857,6 +857,7 @@ if (enable_aurelian) {
       ":aurelian_root",
       ":aurelian_uds_register",
       ":aurelian_virtual_camera",
+      ":aurelian_virtual_mic",
       "//base",
       "//chrome/browser:main_extra_parts",
       "//chrome/browser/ui",

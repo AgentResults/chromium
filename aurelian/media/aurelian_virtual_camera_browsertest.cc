@@ -13,6 +13,7 @@
 #include "aurelian/media/aurelian_virtual_camera.h"
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -105,6 +106,58 @@ std::vector<uint8_t> MakeI420Frame(uint8_t luma) {
   return pixels;
 }
 
+// `samples` float32 PCM of a full-scale ~1kHz square wave (RMS ~0.9) — a loud,
+// unmistakable "TTS" signal far above any default fake-mic beep. Returns the
+// raw bytes Cicero's audio_sink would write (mic contract pcm = float32 LE).
+std::vector<uint8_t> MakeSquareWave(size_t samples) {
+  std::vector<float> wave(samples);
+  for (size_t i = 0; i < samples; ++i) {
+    wave[i] = ((i / 24) % 2 == 0) ? 0.9f : -0.9f;  // 48k/48 = 1kHz
+  }
+  std::vector<uint8_t> bytes(wave.size() * sizeof(float));
+  std::memcpy(bytes.data(), wave.data(), bytes.size());
+  return bytes;
+}
+
+// Opens the (only) microphone via getUserMedia and returns the time-AVERAGED
+// RMS over a ~1.8s window, scaled x1000 (so 0.9 -> ~900), or -1 on timeout.
+// Averaging (not peak) is the discriminator: a continuous full-scale TTS tone
+// averages ~0.9, whereas the default fake-mic beep (20ms bursts at long
+// intervals) and silence both average well under 0.4. So loud TTS flow >> 400
+// and no-flow (beep / silence) << 400.
+constexpr char kAvgMicRmsMilli[] = R"((async () => {
+  const withTimeout = (p, ms) => Promise.race(
+      [p, new Promise((res) => setTimeout(() => res('__t__'), ms))]);
+  let stream;
+  try {
+    stream = await withTimeout(navigator.mediaDevices.getUserMedia({
+        audio: {echoCancellation: false, noiseSuppression: false,
+                autoGainControl: false}}), 7000);
+  } catch (e) { return -1; }
+  if (stream === '__t__') return -1;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const ac = new Ctx();
+  if (ac.state === 'suspended') { try { await ac.resume(); } catch (e) {} }
+  const src = ac.createMediaStreamSource(stream);
+  const an = ac.createAnalyser();
+  an.fftSize = 2048;
+  src.connect(an);
+  const buf = new Float32Array(an.fftSize);
+  let sum = 0, count = 0;
+  const deadline = performance.now() + 1800;
+  while (performance.now() < deadline) {
+    an.getFloatTimeDomainData(buf);
+    let s = 0;
+    for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+    sum += Math.sqrt(s / buf.length);
+    count++;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  stream.getTracks().forEach((t) => t.stop());
+  try { await ac.close(); } catch (e) {}
+  return count ? Math.round((sum / count) * 1000) : -1;
+})())";
+
 }  // namespace
 
 class AurelianVirtualCameraBrowserTest : public InProcessBrowserTest {
@@ -165,6 +218,26 @@ IN_PROC_BROWSER_TEST_F(AurelianVirtualCameraBrowserTest,
   // the avatar (~220) from the neutral-gray fallback (128) and no-frame (-1).
   int brightness = content::EvalJs(wc, kAvgBrightnessOfFirstFrame).ExtractInt();
   EXPECT_GT(brightness, 150) << "rendered camera brightness = " << brightness;
+}
+
+// C-MEDIA-2e/4 (the audio half of the SIT): the agent's TTS flows through the
+// boot-wired virtual mic to a getUserMedia audio track. RED before the mic is
+// boot-started (no ring -> the fake mic is silent/beep -> RMS << 300); GREEN
+// once the boot mic drains MediaSeam's loud TTS into the ring (RMS ~900).
+IN_PROC_BROWSER_TEST_F(AurelianVirtualCameraBrowserTest,
+                       TtsAudioFlowsThroughMic) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/cam.html")));
+  content::WebContents* wc =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Cicero's audio_sink writes ~2.5s of full-scale TTS into the seam; the
+  // boot-registered mic pump drains it into the ring the fake mic reads (the
+  // ring holds the latest ~2s, covering the ~1.8s measurement window).
+  MediaSeam::Get().PushAudioFrame(MakeSquareWave(/*samples=*/120000));
+
+  int rms_milli = content::EvalJs(wc, kAvgMicRmsMilli).ExtractInt();
+  EXPECT_GT(rms_milli, 400) << "averaged mic RMS(milli) = " << rms_milli;
 }
 
 }  // namespace aurelian

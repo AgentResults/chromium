@@ -16,6 +16,7 @@
 #include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/media/aurelian_virtual_camera.h"
+#include "aurelian/media/aurelian_virtual_mic.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
 #include "base/functional/bind.h"
@@ -69,6 +70,10 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   // service at boot and pumping frames live from MediaSeam (which Cicero's
   // video_sink fills). Destroyed on teardown (drops the device pipes).
   std::unique_ptr<AurelianVirtualCamera> virtual_camera;
+  // C-MEDIA-2e — the TTS virtual mic, draining MediaSeam audio into the
+  // shared-memory ring the fork's FakeAudioInputStream reads. Destroyed on
+  // teardown (stops the pump + unmaps the ring).
+  std::unique_ptr<AurelianVirtualMic> virtual_mic;
 
   // tab_id -> impl (owned here; registry in tab_handle.cc mirrors)
   std::map<content::WebContents*, std::unique_ptr<TabHandleImpl>> tab_impls;
@@ -237,6 +242,12 @@ void BrowserMainExtra::PostBrowserStart() {
   // pump timer + mojo remotes have a live UI-thread sequence.
   impl_->virtual_camera = std::make_unique<AurelianVirtualCamera>();
   impl_->virtual_camera->Start();
+
+  // C-MEDIA-2e — open the TTS mic ring + start its drain pump at boot, so the
+  // fork's FakeAudioInputStream reads the agent's voice (Cicero's audio_sink ->
+  // MediaSeam -> this ring) as the browser microphone.
+  impl_->virtual_mic = std::make_unique<AurelianVirtualMic>();
+  impl_->virtual_mic->Start();
 }
 
 void BrowserMainExtra::PostMainMessageLoopRun() {
