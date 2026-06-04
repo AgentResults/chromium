@@ -87,6 +87,24 @@ if (enable_aurelian) {
     ]
   }
 
+  # Clipboard read / write text (C13.b). No RTTI.
+  source_set("aurelian_clipboard") {
+    sources = [
+      "handles/browser/clipboard_handle.cc",
+      "handles/browser/clipboard_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//ui/base/clipboard",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Bookmarks add / list / remove (C13.a). No RTTI.
   source_set("aurelian_bookmarks") {
     sources = [
@@ -434,6 +452,7 @@ if (enable_aurelian) {
       "federation/wss_peer_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/bookmarks_handle_browsertest.cc",
+      "handles/browser/clipboard_handle_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
@@ -458,6 +477,7 @@ if (enable_aurelian) {
       ":aurelian_a11y",
       ":aurelian_audio",
       ":aurelian_bookmarks",
+      ":aurelian_clipboard",
       ":aurelian_capability",
       ":aurelian_devtools",
       ":aurelian_emulation",
@@ -487,6 +507,7 @@ if (enable_aurelian) {
       "//net:test_support",
       "//testing/gtest",
       "//third_party/blink/public/common",
+      "//ui/base/clipboard:clipboard_test_support",
       "//url",
       "//velite",
     ]
