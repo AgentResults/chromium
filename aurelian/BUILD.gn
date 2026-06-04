@@ -87,6 +87,26 @@ if (enable_aurelian) {
     ]
   }
 
+  # Windows list (C1.y). No RTTI.
+  source_set("aurelian_windows") {
+    sources = [
+      "handles/browser/windows_handle.cc",
+      "handles/browser/windows_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//ui/gfx/geometry",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Tabstrip open / close / activate (C1.x). No RTTI.
   source_set("aurelian_tabstrip") {
     sources = [
@@ -564,6 +584,7 @@ if (enable_aurelian) {
       "handles/browser/tab_handle_browsertest.cc",
       "handles/browser/tabgroups_handle_browsertest.cc",
       "handles/browser/tabstrip_handle_browsertest.cc",
+      "handles/browser/windows_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
@@ -591,6 +612,7 @@ if (enable_aurelian) {
       ":aurelian_system",
       ":aurelian_tabgroups",
       ":aurelian_tabstrip",
+      ":aurelian_windows",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",
