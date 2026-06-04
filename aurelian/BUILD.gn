@@ -87,6 +87,25 @@ if (enable_aurelian) {
     ]
   }
 
+  # Tab groups group / query / ungroup (C13.c). No RTTI.
+  source_set("aurelian_tabgroups") {
+    sources = [
+      "handles/browser/tabgroups_handle.cc",
+      "handles/browser/tabgroups_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//components/tab_groups",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Per-tab process info (C12.a). No RTTI.
   source_set("aurelian_process") {
     sources = [
@@ -484,6 +503,7 @@ if (enable_aurelian) {
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
+      "handles/browser/tabgroups_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
@@ -507,6 +527,7 @@ if (enable_aurelian) {
       ":aurelian_permissions",
       ":aurelian_process",
       ":aurelian_streams",
+      ":aurelian_tabgroups",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",
