@@ -571,6 +571,29 @@ if (enable_aurelian) {
 
   # C9 bring-up external WSS peer (design §13). No RTTI; uses Velite's
   # WebSocket channel/listener + AgentSpace root handle.
+  # C9 — the machine-federation register-in (register the `chrome` facet INTO
+  # Agrippa over the local UDS, AURELIAN-DESIGN §3.6/§13). ChromeRoot-free: the
+  # caller injects the ChromeDispatchFn, so this links //velite only (the unit
+  # test does not drag in aurelian_root / chrome-browser handles).
+  source_set("aurelian_uds_register") {
+    sources = [
+      "federation/uds_register.cc",
+      "federation/uds_register.h",
+    ]
+
+    deps = [
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   source_set("aurelian_federation") {
     sources = [
       "federation/wss_peer.cc",
@@ -760,6 +783,7 @@ if (enable_aurelian) {
       "capability/cap_chain_unittest.cc",
       "capability/cap_membrane_unittest.cc",
       "capability/cap_predicate_unittest.cc",
+      "federation/uds_register_unittest.cc",
       "handles/profile/credentials_handle_unittest.cc",
       "handles/streams/subscription_producer_unittest.cc",
     ]
@@ -768,6 +792,7 @@ if (enable_aurelian) {
       ":aurelian_capability",
       ":aurelian_credentials",
       ":aurelian_streams",
+      ":aurelian_uds_register",
       "//base",
       "//base/test:run_all_unittests",
       "//base/test:test_support",
