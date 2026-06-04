@@ -252,4 +252,18 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, FocusedElementReportsFocus) {
   EXPECT_EQ(Dispatch("dom.node.tagName", focused), "\"INPUT\"");
 }
 
+// dom.selection returns the frame's current selected text.
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, SelectionReadsSelectedText) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<p>select me please</p>")));
+
+  // No selection yet.
+  EXPECT_EQ(Dispatch("dom.selection"), "\"\"");
+
+  // Select all the document's text, then read it back.
+  Dispatch("js.eval", "window.getSelection().selectAllChildren(document.body)");
+  auto sel = Dispatch("dom.selection");
+  EXPECT_NE(sel.find("select me please"), std::string::npos) << "sel=" << sel;
+}
+
 }  // namespace aurelian

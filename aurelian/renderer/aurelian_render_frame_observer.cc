@@ -459,6 +459,12 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
     return std::to_string(registry_->IdFor(focused));
   }
 
+  // --- DOM: current selection text ---
+  if (verb == "dom.selection") {
+    if (!frame->HasSelection()) return "\"\"";
+    return JsonStr(frame->SelectionAsText().Utf8());
+  }
+
   // --- DOM: getElementById ---
   if (verb == "dom.getElementById") {
     auto doc = frame->GetDocument();
