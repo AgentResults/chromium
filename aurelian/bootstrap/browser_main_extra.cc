@@ -17,7 +17,9 @@
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/synchronization/waitable_event.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
@@ -189,10 +191,27 @@ void BrowserMainExtra::PostCreateThreads() {
   const bool dialed = impl_->uds_register->Start(
       sock, "chrome", "aurelian-browser",
       [sealed_root](const std::string& path) -> std::string {
-        if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
-          return "broken:ui-hop-pending";
+        // Forwarded asks arrive on UdsRegister's serve thread; browser handles
+        // are UI-thread affine (touching a WebContents off-thread crashes —
+        // physics, not permission). Hop to the UI thread, run RootDispatch
+        // there, and return its reply. In production the UI message loop runs
+        // normally so the posted task executes; a test must spin the loop.
+        if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+          return RootDispatch(sealed_root, path);
         }
-        return RootDispatch(sealed_root, path);
+        std::string result;
+        base::WaitableEvent done;
+        content::GetUIThreadTaskRunner({})->PostTask(
+            FROM_HERE,
+            base::BindOnce(
+                [](ChromeRoot* r, const std::string& p, std::string* out,
+                   base::WaitableEvent* d) {
+                  *out = RootDispatch(r, p);
+                  d->Signal();
+                },
+                sealed_root, path, &result, &done));
+        done.Wait();
+        return result;
       });
   LOG(WARNING) << "[aurelian] machine-hub register "
                << (dialed ? "dialed + registered facet chrome over"
