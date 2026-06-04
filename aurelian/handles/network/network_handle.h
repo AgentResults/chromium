@@ -56,6 +56,14 @@ struct CookieResult {
 CookieResult GetCookie(content::BrowserContext* ctx,
                        const std::string& url,
                        const std::string& name);
+
+// Lists every cookie applicable to `url` (name + value). UI thread.
+struct CookieInfo {
+  std::string name;
+  std::string value;
+};
+std::vector<CookieInfo> GetAllCookies(content::BrowserContext* ctx,
+                                      const std::string& url);
 CookieResult SetCookie(content::BrowserContext* ctx,
                        const std::string& url,
                        const std::string& name,

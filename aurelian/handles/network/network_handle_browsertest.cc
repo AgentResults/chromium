@@ -306,6 +306,22 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, CookieGetNonExistent) {
   EXPECT_EQ(result.error, "not-found");
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, CookieGetAll) {
+  const std::string url = TestURL("/hello").spec();
+  ASSERT_TRUE(SetCookie(GetBrowserContext(), url, "alpha", "1").ok);
+  ASSERT_TRUE(SetCookie(GetBrowserContext(), url, "beta", "2").ok);
+
+  std::vector<CookieInfo> all = GetAllCookies(GetBrowserContext(), url);
+  bool found_alpha = false, found_beta = false;
+  for (const auto& c : all) {
+    if (c.name == "alpha" && c.value == "1") found_alpha = true;
+    if (c.name == "beta" && c.value == "2") found_beta = true;
+  }
+  EXPECT_TRUE(found_alpha);
+  EXPECT_TRUE(found_beta);
+  EXPECT_GE(all.size(), 2u);
+}
+
 // --- Storage tests ---
 
 IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, LocalStorageReadWrite) {

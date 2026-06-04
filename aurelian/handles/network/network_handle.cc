@@ -265,6 +265,31 @@ CookieResult GetCookie(content::BrowserContext* ctx,
   return result;
 }
 
+std::vector<CookieInfo> GetAllCookies(content::BrowserContext* ctx,
+                                      const std::string& url) {
+  auto* partition = ctx->GetDefaultStoragePartition();
+  auto* cookie_mgr = partition->GetCookieManagerForBrowserProcess();
+
+  std::vector<CookieInfo> result;
+  base::RunLoop loop;
+  cookie_mgr->GetCookieList(
+      GURL(url), net::CookieOptions::MakeAllInclusive(),
+      net::CookiePartitionKeyCollection(),
+      base::BindOnce(
+          [](std::vector<CookieInfo>* out, base::RunLoop* rl,
+             const net::CookieAccessResultList& cookies,
+             const net::CookieAccessResultList&) {
+            for (const auto& cookie_with_access : cookies) {
+              out->push_back({std::string(cookie_with_access.cookie.Name()),
+                              std::string(cookie_with_access.cookie.Value())});
+            }
+            rl->Quit();
+          },
+          &result, &loop));
+  loop.Run();
+  return result;
+}
+
 CookieResult SetCookie(content::BrowserContext* ctx,
                        const std::string& url,
                        const std::string& name,
