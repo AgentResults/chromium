@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "aurelian/handles/browser/tab_handle.h"
+#include "aurelian/handles/root/root_handle.h"
 #include "base/logging.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -18,54 +19,9 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents.h"
 #include "velite/agentspaces-wire/agentspace.hpp"
-#include "velite/agentspaces-wire/handle.hpp"
-#include "velite/agentspaces-wire/value_handle.hpp"
 
 namespace aurelian {
 namespace {
-
-// A simple root handle for legion://chrome/ (carried over from C0).
-class ChromeRootHandle : public velite::agentspaces::Handle {
- public:
-  static std::shared_ptr<ChromeRootHandle> make() {
-    return std::shared_ptr<ChromeRootHandle>(new ChromeRootHandle());
-  }
-
-  velite::agentspaces::StateKind state_kind() const override {
-    return velite::agentspaces::StateKind::ResolvedValue;
-  }
-  const velite::agentspaces::Value& resolved_value() const override {
-    return value_;
-  }
-  std::shared_ptr<velite::agentspaces::Handle> resolved_handle()
-      const override {
-    return nullptr;
-  }
-  std::string_view broken_reason() const override { return ""; }
-  std::string sturdy_identity() const override { return "legion://chrome/"; }
-
-  std::shared_ptr<velite::agentspaces::Handle> ask_impl(
-      std::string_view msg,
-      const velite::agentspaces::Value& /*spec*/) override {
-    using V = velite::agentspaces::Value;
-    using VH = velite::agentspaces::ValueHandle;
-    if (msg == "__getIdentity") return VH::make(V("legion://chrome/"));
-    if (msg == "describe") {
-      return VH::make(V::make_object({
-          {"name", V("chrome")},
-          {"uri", V("legion://chrome/")},
-          {"embodiment", V("aurelian")},
-      }));
-    }
-    return VH::make_broken("not-callable");
-  }
-
-  void tell(std::string_view, const velite::agentspaces::Value&) override {}
-
- private:
-  ChromeRootHandle() : value_("legion://chrome/") {}
-  velite::agentspaces::Value value_;
-};
 
 int64_t NextTabId() {
   static int64_t next = 1;
@@ -80,7 +36,9 @@ int64_t NextTabId() {
 struct BrowserMainExtraImpl : public BrowserListObserver,
                               public TabStripModelObserver {
   std::shared_ptr<velite::agentspaces::AgentSpace> actor_space;
-  std::shared_ptr<ChromeRootHandle> root;
+  // The navigable legion://chrome/ root — the single shared model (also served
+  // to remote peers by the federation layer). Owned via the C-API.
+  ChromeRoot* root = nullptr;
   std::unique_ptr<TabsHandleImpl> tabs_handle;
 
   // tab_id -> impl (owned here; registry in tab_handle.cc mirrors)
@@ -93,6 +51,7 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
     for (Browser* b : observed_browsers_) {
       b->tab_strip_model()->RemoveObserver(this);
     }
+    DestroyChromeRoot(root);
   }
 
   void StartObserving() {
@@ -170,24 +129,14 @@ void BrowserMainExtra::PostCreateThreads() {
   impl_->actor_space =
       velite::agentspaces::AgentSpace::make("chrome-browser");
 
-  // 2. Mount the root handle.
-  impl_->root = ChromeRootHandle::make();
+  // 2. Mount the navigable root handle (shared model, via the C-API).
+  impl_->root = CreateChromeRoot();
 
   // 3. Create the tabs handle.
   impl_->tabs_handle = CreateTabsHandle();
 
-  // 4. Prove C0 still works.
-  auto identity_handle =
-      impl_->root->ask("__getIdentity", velite::agentspaces::Value());
-  std::string identity_result;
-  if (identity_handle &&
-      identity_handle->state_kind() ==
-          velite::agentspaces::StateKind::ResolvedValue &&
-      identity_handle->resolved_value().is_string()) {
-    identity_result = identity_handle->resolved_value().as_string();
-  } else {
-    identity_result = "<failed>";
-  }
+  // 4. Prove the root is reachable: walk it for its identity.
+  std::string identity_result = RootDispatch(impl_->root, "__getIdentity");
   LOG(WARNING) << "[aurelian] legion://chrome/ mounted; __getIdentity="
                << identity_result;
 }
