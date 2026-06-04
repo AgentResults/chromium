@@ -42,4 +42,12 @@ IN_PROC_BROWSER_TEST_F(AurelianClipboardBrowserTest, WriteReadHtml) {
             std::string::npos);
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianClipboardBrowserTest, Clear) {
+  WriteClipboardText("to-be-cleared");
+  ASSERT_EQ(ReadClipboardText(), "to-be-cleared");
+
+  ClearClipboard();
+  EXPECT_EQ(ReadClipboardText(), "");
+}
+
 }  // namespace aurelian

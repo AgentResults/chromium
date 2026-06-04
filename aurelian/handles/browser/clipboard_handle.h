@@ -21,6 +21,9 @@ std::string ReadClipboardText();
 void WriteClipboardHtml(const std::string& html);
 std::string ReadClipboardHtml();
 
+// Clears the copy/paste clipboard. UI thread.
+void ClearClipboard();
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_CLIPBOARD_HANDLE_H_

@@ -66,4 +66,11 @@ std::string ReadClipboardHtml() {
   return base::UTF16ToUTF8(markup);
 }
 
+void ClearClipboard() {
+  ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
+  if (clipboard) {
+    clipboard->Clear(ui::ClipboardBuffer::kCopyPaste);
+  }
+}
+
 }  // namespace aurelian
