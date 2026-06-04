@@ -660,6 +660,34 @@ if (enable_aurelian) {
     ]
   }
 
+  # C-MEDIA-1: the bindable media Handle surface (video_sink / audio_sink /
+  # audio_source) over the process-global MediaSeam frame buffer. RTTI (Velite
+  # handle code). //base + //velite + the streams producer only — no chrome
+  # handles, so the unit test links light.
+  source_set("aurelian_media") {
+    sources = [
+      "handles/media/media_handles.cc",
+      "handles/media/media_handles.h",
+      "handles/media/media_seam.cc",
+      "handles/media/media_seam.h",
+    ]
+
+    deps = [
+      ":aurelian_streams",
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # C10: existing asmodeus tab-audio capture routed through a Velite handle.
   # RTTI (Velite handle code).
   source_set("aurelian_audio") {
@@ -785,6 +813,7 @@ if (enable_aurelian) {
       "capability/cap_membrane_unittest.cc",
       "capability/cap_predicate_unittest.cc",
       "federation/uds_register_unittest.cc",
+      "handles/media/media_seam_unittest.cc",
       "handles/profile/credentials_handle_unittest.cc",
       "handles/streams/subscription_producer_unittest.cc",
     ]
@@ -792,6 +821,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_capability",
       ":aurelian_credentials",
+      ":aurelian_media",
       ":aurelian_streams",
       ":aurelian_uds_register",
       "//base",
