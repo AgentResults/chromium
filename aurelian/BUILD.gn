@@ -689,6 +689,33 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
+  # C-MEDIA-2: the content-layer virtual camera. Registers a REAL enumerable
+  # camera with Chromium's video capture service (the honest browser-process
+  # virtual-device seam), so the avatar appears to getUserMedia as the browser
+  # camera. No RTTI / no Velite (pure content+media+mojo).
+  source_set("aurelian_virtual_camera") {
+    sources = [
+      "media/aurelian_virtual_camera.cc",
+      "media/aurelian_virtual_camera.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+      "//media",
+      "//media/capture:capture_lib",
+      "//media/capture/mojom:video_capture_buffer",
+      "//mojo/public/cpp/bindings",
+      "//services/video_capture/public/mojom",
+      "//ui/gfx/geometry",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # C10: existing asmodeus tab-audio capture routed through a Velite handle.
   # RTTI (Velite handle code).
   source_set("aurelian_audio") {
@@ -881,6 +908,7 @@ if (enable_aurelian) {
       "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
+      "media/aurelian_virtual_camera_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
     ]
 
@@ -915,12 +943,14 @@ if (enable_aurelian) {
       ":aurelian_system",
       ":aurelian_tabgroups",
       ":aurelian_tabstrip",
+      ":aurelian_virtual_camera",
       ":aurelian_windows",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",
       "//chrome/browser",
       "//chrome/browser/ui",
+      "//media",
       "//chrome/test:browser_tests_runner",
       "//chrome/test:test_support",
       "//components/bookmarks/browser",
