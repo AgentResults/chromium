@@ -64,6 +64,10 @@ struct CookieInfo {
 };
 std::vector<CookieInfo> GetAllCookies(content::BrowserContext* ctx,
                                       const std::string& url);
+
+// Deletes every cookie applicable to `url`. Returns the number deleted. UI
+// thread.
+int DeleteAllCookies(content::BrowserContext* ctx, const std::string& url);
 CookieResult SetCookie(content::BrowserContext* ctx,
                        const std::string& url,
                        const std::string& name,

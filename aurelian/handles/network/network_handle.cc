@@ -355,6 +355,28 @@ CookieResult DeleteCookie(content::BrowserContext* ctx,
   return result;
 }
 
+int DeleteAllCookies(content::BrowserContext* ctx, const std::string& url) {
+  auto* partition = ctx->GetDefaultStoragePartition();
+  auto* cookie_mgr = partition->GetCookieManagerForBrowserProcess();
+
+  // No cookie_name filter => delete every cookie applicable to the URL.
+  auto filter = network::mojom::CookieDeletionFilter::New();
+  filter->url = GURL(url);
+
+  int deleted = 0;
+  base::RunLoop loop;
+  cookie_mgr->DeleteCookies(
+      std::move(filter),
+      base::BindOnce(
+          [](int* out, base::RunLoop* rl, uint32_t count) {
+            *out = static_cast<int>(count);
+            rl->Quit();
+          },
+          &deleted, &loop));
+  loop.Run();
+  return deleted;
+}
+
 // --- Download API (UI thread) ---
 
 void StartDownload(content::BrowserContext* ctx, const std::string& url) {

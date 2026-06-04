@@ -322,6 +322,17 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, CookieGetAll) {
   EXPECT_GE(all.size(), 2u);
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, CookieDeleteAll) {
+  const std::string url = TestURL("/hello").spec();
+  ASSERT_TRUE(SetCookie(GetBrowserContext(), url, "x", "1").ok);
+  ASSERT_TRUE(SetCookie(GetBrowserContext(), url, "y", "2").ok);
+  ASSERT_GE(GetAllCookies(GetBrowserContext(), url).size(), 2u);
+
+  int deleted = DeleteAllCookies(GetBrowserContext(), url);
+  EXPECT_GE(deleted, 2);
+  EXPECT_TRUE(GetAllCookies(GetBrowserContext(), url).empty());
+}
+
 // --- Storage tests ---
 
 IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, LocalStorageReadWrite) {
