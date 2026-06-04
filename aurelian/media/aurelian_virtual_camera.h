@@ -6,7 +6,12 @@
 #define AURELIAN_MEDIA_AURELIAN_VIRTUAL_CAMERA_H_
 
 #include <cstdint>
+#include <map>
 
+#include "base/memory/shared_memory_mapping.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/video_capture/public/mojom/producer.mojom.h"
@@ -58,11 +63,21 @@ class AurelianVirtualCamera : public video_capture::mojom::Producer {
 
  private:
   void RegisterDevice();
+  // The frame pump (C-MEDIA-2b): ~30fps, request a buffer, fill it from the
+  // latest avatar frame in MediaSeam, hand it to the service.
+  void StartPump();
+  void PushNextFrame();
+  void OnFrameBufferReceived(base::TimeDelta timestamp, int32_t buffer_id);
 
   bool registered_ = false;
+  int64_t frame_count_ = 0;
   mojo::Remote<video_capture::mojom::VideoSourceProvider> provider_;
   mojo::Receiver<video_capture::mojom::Producer> producer_receiver_{this};
   mojo::Remote<video_capture::mojom::SharedMemoryVirtualDevice> virtual_device_;
+  // Service-owned shared-memory buffers, mapped for writing the avatar pixels.
+  std::map<int32_t, base::WritableSharedMemoryMapping> buffers_;
+  base::RepeatingTimer pump_timer_;
+  base::WeakPtrFactory<AurelianVirtualCamera> weak_factory_{this};
 };
 
 }  // namespace aurelian

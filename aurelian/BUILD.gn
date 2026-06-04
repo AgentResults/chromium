@@ -661,19 +661,35 @@ if (enable_aurelian) {
     ]
   }
 
-  # C-MEDIA-1: the bindable media Handle surface (video_sink / audio_sink /
-  # audio_source) over the process-global MediaSeam frame buffer. RTTI (Velite
-  # handle code). //base + //velite + the streams producer only — no chrome
-  # handles, so the unit test links light.
-  source_set("aurelian_media") {
+  # C-MEDIA-1: the process-global MediaSeam frame buffer — plain C++ (//base
+  # only, no Velite/RTTI), so the content-layer capture device (no-RTTI) and the
+  # Velite media Handles can both read it.
+  source_set("aurelian_media_seam") {
     sources = [
-      "handles/media/media_handles.cc",
-      "handles/media/media_handles.h",
       "handles/media/media_seam.cc",
       "handles/media/media_seam.h",
     ]
 
+    deps = [ "//base" ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # C-MEDIA-1: the bindable media Handle surface (video_sink / audio_sink /
+  # audio_source) over the MediaSeam. RTTI (Velite handle code). //base +
+  # //velite + the streams producer only — no chrome handles, so the unit test
+  # links light.
+  source_set("aurelian_media") {
+    sources = [
+      "handles/media/media_handles.cc",
+      "handles/media/media_handles.h",
+    ]
+
     deps = [
+      ":aurelian_media_seam",
       ":aurelian_streams",
       "//base",
       "//velite",
@@ -700,6 +716,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_media_seam",
       "//base",
       "//content/public/browser",
       "//media",
@@ -951,6 +968,7 @@ if (enable_aurelian) {
       "//chrome/browser",
       "//chrome/browser/ui",
       "//media",
+      "//media/capture:capture_switches",
       "//chrome/test:browser_tests_runner",
       "//chrome/test:test_support",
       "//components/bookmarks/browser",
