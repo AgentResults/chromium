@@ -235,4 +235,21 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, ScrollIntoViewScrolls) {
   EXPECT_NE(Dispatch("js.eval", "window.scrollY"), "0");
 }
 
+// dom.focusedElement returns the document's focused element node-id ("null" if
+// none).
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, FocusedElementReportsFocus) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<input id='inp'>")));
+  auto ids = Dispatch("dom.query", "#inp");
+  ASSERT_NE(ids, "[]");
+  std::string id = ids.substr(1, ids.find_first_of(",]") - 1);
+
+  // Focus the input, then ask which element is focused.
+  Dispatch("dom.node.focus", id);
+  auto focused = Dispatch("dom.focusedElement");
+  EXPECT_EQ(focused, id) << "focused=" << focused;
+  // And it is the input element.
+  EXPECT_EQ(Dispatch("dom.node.tagName", focused), "\"INPUT\"");
+}
+
 }  // namespace aurelian

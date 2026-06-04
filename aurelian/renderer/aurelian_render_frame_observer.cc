@@ -452,6 +452,13 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
     return oss.str();
   }
 
+  // --- DOM: focused element ---
+  if (verb == "dom.focusedElement") {
+    blink::WebElement focused = frame->GetDocument().FocusedElement();
+    if (focused.IsNull()) return "null";
+    return std::to_string(registry_->IdFor(focused));
+  }
+
   // --- DOM: getElementById ---
   if (verb == "dom.getElementById") {
     auto doc = frame->GetDocument();
