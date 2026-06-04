@@ -11,6 +11,8 @@
 
 #include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
+#include "aurelian/membrane/embodiment_policy.h"
+#include "aurelian/membrane/install.h"
 #include "base/logging.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -36,8 +38,9 @@ int64_t NextTabId() {
 struct BrowserMainExtraImpl : public BrowserListObserver,
                               public TabStripModelObserver {
   std::shared_ptr<velite::agentspaces::AgentSpace> actor_space;
-  // The navigable legion://chrome/ root — the single shared model (also served
-  // to remote peers by the federation layer). Owned via the C-API.
+  // The navigable legion://chrome/ root — the install-membrane's only ingress
+  // (the single shared model, also served to remote peers by the federation
+  // layer). Erected by the one-shot install; owned via the C-API.
   ChromeRoot* root = nullptr;
   std::unique_ptr<TabsHandleImpl> tabs_handle;
 
@@ -51,7 +54,13 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
     for (Browser* b : observed_browsers_) {
       b->tab_strip_model()->RemoveObserver(this);
     }
-    DestroyChromeRoot(root);
+    // Revoke the whole membrane: cascade-revoke the AgentSpace (force-breaking
+    // every mounted Handle) and destroy the root.
+    if (actor_space) {
+      UninstallChromeEmbodiment(*actor_space, root);
+    } else {
+      DestroyChromeRoot(root);
+    }
   }
 
   void StartObserving() {
@@ -125,20 +134,25 @@ BrowserMainExtra::~BrowserMainExtra() = default;
 void BrowserMainExtra::PostCreateThreads() {
   impl_ = std::make_unique<BrowserMainExtraImpl>();
 
-  // 1. Create the browser-process AgentSpace.
+  // 1. Create the browser-process AgentSpace (the membrane carrier).
   impl_->actor_space =
       velite::agentspaces::AgentSpace::make("chrome-browser");
 
-  // 2. Mount the navigable root handle (shared model, via the C-API).
-  impl_->root = CreateChromeRoot();
+  // 2. THE ONE-SHOT INSTALL — the only consumer of ambient browser authority
+  //    (AURELIAN-DESIGN.md §4.5). Standalone bring-up uses an explicit
+  //    full-trust EmbodimentPolicy (typed + sealed + revocable), NOT an
+  //    un-typed ambient self-grant. install mounts the policy-allowed
+  //    capabilities under a sealed legion://chrome/ root.
+  impl_->root = InstallChromeEmbodiment(*impl_->actor_space,
+                                        EmbodimentPolicy::FullStandalone());
 
   // 3. Create the tabs handle.
   impl_->tabs_handle = CreateTabsHandle();
 
-  // 4. Prove the root is reachable: walk it for its identity.
+  // 4. Prove the membrane is erected + its root reachable: walk it for identity.
   std::string identity_result = RootDispatch(impl_->root, "__getIdentity");
-  LOG(WARNING) << "[aurelian] legion://chrome/ mounted; __getIdentity="
-               << identity_result;
+  LOG(WARNING) << "[aurelian] legion://chrome/ install-membrane sealed; "
+               << "__getIdentity=" << identity_result;
 }
 
 void BrowserMainExtra::PreBrowserStart() {

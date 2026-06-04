@@ -128,6 +128,22 @@ if (enable_aurelian) {
     ]
   }
 
+  # Install-membrane: the typed EmbodimentPolicy (C++ legion://types/
+  # EmbodimentPolicy). No RTTI; no ambient deps. (AURELIAN-DESIGN.md §4.5)
+  source_set("aurelian_embodiment_policy") {
+    sources = [
+      "membrane/embodiment_policy.cc",
+      "membrane/embodiment_policy.h",
+    ]
+
+    deps = [ "//base" ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Navigable legion://chrome/ root handle (reachable-from-root). RTTI (Velite).
   source_set("aurelian_root") {
     sources = [
@@ -136,9 +152,35 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_embodiment_policy",
       ":aurelian_gpu",
       ":aurelian_system",
       ":aurelian_tabs_overview",
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
+  # The one-shot install (genesis seam): ambient authority -> sealed Handle
+  # graph, per-AgentSpace one-shot + revocable. RTTI (touches Velite AgentSpace).
+  source_set("aurelian_install") {
+    sources = [
+      "membrane/install.cc",
+      "membrane/install.h",
+    ]
+
+    deps = [
+      ":aurelian_embodiment_policy",
+      ":aurelian_root",
       "//base",
       "//velite",
     ]
@@ -693,7 +735,9 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_embodiment_policy",
       ":aurelian_handles",
+      ":aurelian_install",
       ":aurelian_root",
       "//base",
       "//chrome/browser:main_extra_parts",
@@ -769,6 +813,7 @@ if (enable_aurelian) {
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/profile_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
+      "membrane/install_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
@@ -802,7 +847,9 @@ if (enable_aurelian) {
       ":aurelian_network",
       ":aurelian_page_info",
       ":aurelian_permissions",
+      ":aurelian_embodiment_policy",
       ":aurelian_gpu",
+      ":aurelian_install",
       ":aurelian_process",
       ":aurelian_profile",
       ":aurelian_root",

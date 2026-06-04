@@ -11,6 +11,7 @@
 #include "aurelian/handles/browser/gpu_handle.h"
 #include "aurelian/handles/browser/system_handle.h"
 #include "aurelian/handles/browser/tabs_overview.h"
+#include "aurelian/membrane/embodiment_policy.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -48,7 +49,9 @@ class SystemInfoHandle : public Handle {
           {"rendererCount", Value(info.render_process_count)},
       }));
     }
-    return ValueHandle::make_broken("not-callable");
+    // No leaf handle exposes an unwrap path to its ambient reference; any
+    // unknown message (including __ambient / unwrap probes) is refused.
+    return ValueHandle::make_broken("unknown-message");
   }
 
   void tell(std::string_view, const Value&) override {}
@@ -81,7 +84,9 @@ class GpuInfoHandle : public Handle {
           {"glRenderer", Value(gpu.gl_renderer)},
       }));
     }
-    return ValueHandle::make_broken("not-callable");
+    // No leaf handle exposes an unwrap path to its ambient reference; any
+    // unknown message (including __ambient / unwrap probes) is refused.
+    return ValueHandle::make_broken("unknown-message");
   }
 
   void tell(std::string_view, const Value&) override {}
@@ -113,7 +118,9 @@ class TabsOverviewHandle : public Handle {
     if (msg == "activeUrl") {
       return ValueHandle::make(Value(GetTabsOverview().active_url));
     }
-    return ValueHandle::make_broken("not-callable");
+    // No leaf handle exposes an unwrap path to its ambient reference; any
+    // unknown message (including __ambient / unwrap probes) is refused.
+    return ValueHandle::make_broken("unknown-message");
   }
 
   void tell(std::string_view, const Value&) override {}
@@ -122,9 +129,15 @@ class TabsOverviewHandle : public Handle {
   Value identity_{std::string("legion://chrome/tabs")};
 };
 
-// legion://chrome/ — the navigable root.
+// legion://chrome/ — the navigable root and the install-membrane's only
+// ingress. A capability child is mounted ONLY when the install policy allows
+// it (the seal, AURELIAN-DESIGN.md §4.5); an unauthorised reach to ambient
+// browser state fails.
 class ChromeRootHandle : public Handle {
  public:
+  explicit ChromeRootHandle(EmbodimentPolicy policy)
+      : policy_(std::move(policy)) {}
+
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
   const Value& resolved_value() const override { return identity_; }
   std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
@@ -133,6 +146,7 @@ class ChromeRootHandle : public Handle {
 
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
                                    const Value& /*spec*/) override {
+    // Identity verbs are not ambient authority; always answerable.
     if (msg == "__getIdentity") {
       return ValueHandle::make(Value(std::string("legion://chrome/")));
     }
@@ -143,22 +157,39 @@ class ChromeRootHandle : public Handle {
           {"embodiment", Value(std::string("aurelian"))},
       }));
     }
-    if (msg == "system") {
-      return std::make_shared<SystemInfoHandle>();
-    }
-    if (msg == "tabs") {
-      return std::make_shared<TabsOverviewHandle>();
-    }
-    if (msg == "gpu") {
+
+    // Capability mounts — gated by the policy. A mountable name the policy
+    // does not grant resolves broken("out-of-scope"); no ambient state leaks.
+    const std::string name(msg);
+    if (name == "system" || name == "tabs" || name == "gpu") {
+      if (!policy_.Allows(name)) {
+        return ValueHandle::make_broken("out-of-scope");
+      }
+      if (name == "system") {
+        return std::make_shared<SystemInfoHandle>();
+      }
+      if (name == "tabs") {
+        return std::make_shared<TabsOverviewHandle>();
+      }
       return std::make_shared<GpuInfoHandle>();
     }
-    return ValueHandle::make_broken("not-callable");
+
+    // Introspection / unwrap probes (__ambient, unwrap, …) never yield a raw
+    // ambient reference.
+    if (!name.empty() && name.front() == '_') {
+      return ValueHandle::make_broken("unknown-message");
+    }
+
+    // Any other name is a capability the membrane does not mount — an
+    // unauthorised reach, out of scope.
+    return ValueHandle::make_broken("out-of-scope");
   }
 
   void tell(std::string_view, const Value&) override {}
 
  private:
   Value identity_{std::string("legion://chrome/")};
+  EmbodimentPolicy policy_;
 };
 
 // Serializes a settled handle's reply to a compact string. Objects emit a
@@ -208,8 +239,12 @@ struct ChromeRoot {
 };
 
 ChromeRoot* CreateChromeRoot() {
+  return CreateChromeRootWithPolicy(EmbodimentPolicy::FullStandalone());
+}
+
+ChromeRoot* CreateChromeRootWithPolicy(const EmbodimentPolicy& policy) {
   auto* root = new ChromeRoot();
-  root->handle = std::make_shared<ChromeRootHandle>();
+  root->handle = std::make_shared<ChromeRootHandle>(policy);
   return root;
 }
 

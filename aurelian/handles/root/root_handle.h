@@ -15,10 +15,20 @@
 
 namespace aurelian {
 
+class EmbodimentPolicy;
+
 // Opaque owner of the Velite root handle (defined in the .cc).
 struct ChromeRoot;
 
+// Full-standalone root (every capability mounted). Equivalent to
+// CreateChromeRootWithPolicy(EmbodimentPolicy::FullStandalone()).
 ChromeRoot* CreateChromeRoot();
+
+// Policy-gated root: a capability child is reachable only when the policy
+// allows it; an unauthorised name resolves broken("out-of-scope"). This is the
+// install-membrane seal (AURELIAN-DESIGN.md §4.5).
+ChromeRoot* CreateChromeRootWithPolicy(const EmbodimentPolicy& policy);
+
 void DestroyChromeRoot(ChromeRoot* root);
 
 // Walks `path` (segments separated by '/') from the root: each non-final
