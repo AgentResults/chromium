@@ -87,6 +87,24 @@ if (enable_aurelian) {
     ]
   }
 
+  # Per-tab process info (C12.a). No RTTI.
+  source_set("aurelian_process") {
+    sources = [
+      "handles/browser/process_handle.cc",
+      "handles/browser/process_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Clipboard read / write text (C13.b). No RTTI.
   source_set("aurelian_clipboard") {
     sources = [
@@ -460,6 +478,7 @@ if (enable_aurelian) {
       "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
       "handles/browser/permissions_handle_browsertest.cc",
+      "handles/browser/process_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",
@@ -486,6 +505,7 @@ if (enable_aurelian) {
       ":aurelian_handles",
       ":aurelian_network",
       ":aurelian_permissions",
+      ":aurelian_process",
       ":aurelian_streams",
       "//aurelian/public/mojom",
       "//base",
