@@ -426,6 +426,38 @@ void AurelianRenderFrameObserver::OnStreamDisconnect(RendererStream* stream) {
   }
 }
 
+std::string AurelianRenderFrameObserver::EvalJsExpression(
+    const std::string& expr) {
+  if (!render_frame() || !render_frame()->GetWebFrame())
+    return "{\"error\":\"frame-gone\"}";
+  auto* frame = render_frame()->GetWebFrame();
+  auto* isolate = frame->GetAgentGroupScheduler()->Isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Value> result = frame->ExecuteScriptAndReturnValue(
+      blink::WebScriptSource(blink::WebString::FromUTF8(expr)));
+  if (result.IsEmpty() || result->IsUndefined() || result->IsNull())
+    return "null";
+  if (result->IsBoolean())
+    return result->BooleanValue(isolate) ? "true" : "false";
+  if (result->IsNumber()) {
+    double d = result->NumberValue(isolate->GetCurrentContext()).FromMaybe(0.0);
+    if (d == static_cast<int64_t>(d) && d >= -1e15 && d <= 1e15)
+      return std::to_string(static_cast<int64_t>(d));
+    return std::to_string(d);
+  }
+  if (result->IsString()) {
+    v8::String::Utf8Value utf8(isolate, result);
+    return JsonStr(std::string(*utf8, utf8.length()));
+  }
+  v8::Local<v8::String> json_str;
+  if (v8::JSON::Stringify(isolate->GetCurrentContext(), result)
+          .ToLocal(&json_str)) {
+    v8::String::Utf8Value utf8(isolate, json_str);
+    return std::string(*utf8, utf8.length());
+  }
+  return "{\"error\":\"unstringifiable\"}";
+}
+
 std::string AurelianRenderFrameObserver::DispatchVerb(
     const std::string& verb,
     const std::string& param) {
@@ -567,32 +599,20 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
 
   // --- JS: eval ---
   if (verb == "js.eval") {
-    auto* isolate = frame->GetAgentGroupScheduler()->Isolate();
-    v8::HandleScope handle_scope(isolate);
-    v8::Local<v8::Value> result = frame->ExecuteScriptAndReturnValue(
-        blink::WebScriptSource(blink::WebString::FromUTF8(param)));
-    if (result.IsEmpty() || result->IsUndefined() || result->IsNull())
-      return "null";
-    if (result->IsBoolean())
-      return result->BooleanValue(isolate) ? "true" : "false";
-    if (result->IsNumber()) {
-      double d =
-          result->NumberValue(isolate->GetCurrentContext()).FromMaybe(0.0);
-      if (d == static_cast<int64_t>(d) && d >= -1e15 && d <= 1e15)
-        return std::to_string(static_cast<int64_t>(d));
-      return std::to_string(d);
+    return EvalJsExpression(param);
+  }
+
+  if (verb == "js.callFunction") {
+    // param: "fn\targsJson" — invokes (fn).apply(null, args).
+    std::string fn = param;
+    std::string args = "[]";
+    auto tab = param.find('\t');
+    if (tab != std::string::npos) {
+      fn = param.substr(0, tab);
+      args = param.substr(tab + 1);
     }
-    if (result->IsString()) {
-      v8::String::Utf8Value utf8(isolate, result);
-      return JsonStr(std::string(*utf8, utf8.length()));
-    }
-    v8::Local<v8::String> json_str;
-    if (v8::JSON::Stringify(isolate->GetCurrentContext(), result)
-            .ToLocal(&json_str)) {
-      v8::String::Utf8Value utf8(isolate, json_str);
-      return std::string(*utf8, utf8.length());
-    }
-    return "{\"error\":\"unstringifiable\"}";
+    if (args.empty()) args = "[]";
+    return EvalJsExpression("(" + fn + ").apply(null, " + args + ")");
   }
 
   // --- DOM: forget node (for GC test) ---

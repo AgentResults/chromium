@@ -266,4 +266,20 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, SelectionReadsSelectedText) {
   EXPECT_NE(sel.find("select me please"), std::string::npos) << "sel=" << sel;
 }
 
+// js.callFunction invokes a function with structured args (design §10).
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, CallFunctionWithArgs) {
+  NavigateToTestPage();
+
+  // Sum two numeric args.
+  auto sum = Dispatch("js.callFunction",
+                      std::string("function(a,b){return a+b;}") + "\t[2,3]");
+  EXPECT_EQ(sum, "5") << "sum=" << sum;
+
+  // String result is JSON-quoted, like js.eval.
+  auto greet =
+      Dispatch("js.callFunction",
+               std::string("function(n){return 'hi '+n;}") + "\t[\"bot\"]");
+  EXPECT_EQ(greet, "\"hi bot\"") << "greet=" << greet;
+}
+
 }  // namespace aurelian

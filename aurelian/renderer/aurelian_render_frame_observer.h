@@ -62,6 +62,10 @@ class AurelianRenderFrameObserver
   // Dispatch a verb+param to the DOM/JS handlers. Returns reply string.
   std::string DispatchVerb(const std::string& verb, const std::string& param);
 
+  // Evaluates a JS expression in the main world and serializes the result
+  // (shared by js.eval + js.callFunction).
+  std::string EvalJsExpression(const std::string& expr);
+
   // Ensure a node is accessible from JS via __aurelian_nodes[id].
   void EnsureNodeBridge(int node_id, const blink::WebElement& el);
 
