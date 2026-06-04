@@ -497,6 +497,21 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
     return "{\"ok\":true}";
   }
 
+  if (verb == "dom.node.getAttribute") {
+    // param: "nodeId\tname"
+    std::istringstream iss(param);
+    std::string id_str, name;
+    std::getline(iss, id_str, '\t');
+    std::getline(iss, name, '\t');
+    int node_id = 0;
+    if (!ParseInt(id_str, &node_id)) return "{\"error\":\"bad-node-id\"}";
+    auto el = registry_->NodeFor(node_id);
+    if (el.IsNull()) return "{\"error\":\"gone\"}";
+    blink::WebString attr_name = blink::WebString::FromUTF8(name);
+    if (!el.HasAttribute(attr_name)) return "null";
+    return JsonStr(el.GetAttribute(attr_name).Utf8());
+  }
+
   if (verb == "dom.node.click") {
     int node_id = 0;
     if (!ParseInt(param, &node_id)) return "{\"error\":\"bad-node-id\"}";

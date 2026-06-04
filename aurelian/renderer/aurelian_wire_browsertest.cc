@@ -184,4 +184,22 @@ IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest,
                       << " after 100 repeated queries";
 }
 
+// A dedicated getAttribute verb reads a node's attribute value (C3 only had
+// setAttribute + readback inside the self-test).
+IN_PROC_BROWSER_TEST_F(AurelianWireBrowserTest, GetAttributeReadsValue) {
+  NavigateToTestPage();
+  auto ids = Dispatch("dom.query", "#target");
+  ASSERT_NE(ids, "[]");
+  std::string id = ids.substr(1, ids.find_first_of(",]") - 1);
+
+  // Set an attribute, then read it back via the dedicated getAttribute verb.
+  Dispatch("dom.node.setAttribute", id + "\tdata-x\thello");
+  auto val = Dispatch("dom.node.getAttribute", id + "\tdata-x");
+  EXPECT_NE(val.find("hello"), std::string::npos) << "got: " << val;
+
+  // A missing attribute reads as null.
+  auto missing = Dispatch("dom.node.getAttribute", id + "\tdata-absent");
+  EXPECT_EQ(missing, "null") << "got: " << missing;
+}
+
 }  // namespace aurelian
