@@ -41,6 +41,26 @@ bool EnableExtensionById(content::BrowserContext* ctx, const std::string& id) {
   return true;
 }
 
+ExtensionDetails GetExtensionDetails(content::BrowserContext* ctx,
+                                     const std::string& id) {
+  ExtensionDetails details;
+  auto* registry = extensions::ExtensionRegistry::Get(ctx);
+  if (!registry) {
+    return details;
+  }
+  const extensions::Extension* ext = registry->GetInstalledExtension(id);
+  if (!ext) {
+    return details;
+  }
+  details.found = true;
+  details.id = ext->id();
+  details.name = ext->name();
+  details.version = ext->VersionString();
+  details.description = ext->description();
+  details.enabled = registry->enabled_extensions().Contains(id);
+  return details;
+}
+
 bool DisableExtensionById(content::BrowserContext* ctx, const std::string& id) {
   auto* registry = extensions::ExtensionRegistry::Get(ctx);
   auto* registrar = extensions::ExtensionRegistrar::Get(ctx);

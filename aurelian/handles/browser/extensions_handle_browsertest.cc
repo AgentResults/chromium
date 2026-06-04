@@ -76,4 +76,22 @@ IN_PROC_BROWSER_TEST_F(AurelianExtBrowserTest, ListAndToggle) {
   EXPECT_FALSE(DisableExtensionById(Ctx(), "00000000000000000000000000000000"));
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianExtBrowserTest, Details) {
+  scoped_refptr<const extensions::Extension> ext =
+      extensions::ExtensionBuilder("Detailed Ext").SetVersion("2.3").Build();
+  std::string id = ext->id();
+  extensions::ExtensionRegistrar::Get(Ctx())->AddExtension(ext);
+
+  ExtensionDetails d = GetExtensionDetails(Ctx(), id);
+  ASSERT_TRUE(d.found);
+  EXPECT_EQ(d.id, id);
+  EXPECT_EQ(d.name, "Detailed Ext");
+  EXPECT_EQ(d.version, "2.3");
+  EXPECT_TRUE(d.enabled);
+
+  // An unknown id is not found.
+  EXPECT_FALSE(
+      GetExtensionDetails(Ctx(), "00000000000000000000000000000000").found);
+}
+
 }  // namespace aurelian

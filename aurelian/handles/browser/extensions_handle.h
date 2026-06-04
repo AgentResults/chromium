@@ -30,6 +30,19 @@ std::vector<ExtensionInfo> ListExtensions(content::BrowserContext* ctx);
 bool EnableExtensionById(content::BrowserContext* ctx, const std::string& id);
 bool DisableExtensionById(content::BrowserContext* ctx, const std::string& id);
 
+// Detailed info for one installed extension. `found` is false if no extension
+// with that id is installed.
+struct ExtensionDetails {
+  bool found = false;
+  std::string id;
+  std::string name;
+  std::string version;
+  std::string description;
+  bool enabled = false;
+};
+ExtensionDetails GetExtensionDetails(content::BrowserContext* ctx,
+                                     const std::string& id);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_EXTENSIONS_HANDLE_H_
