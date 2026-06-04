@@ -762,6 +762,7 @@ if (enable_aurelian) {
       ":aurelian_handles",
       ":aurelian_install",
       ":aurelian_root",
+      ":aurelian_uds_register",
       "//base",
       "//chrome/browser:main_extra_parts",
       "//chrome/browser/ui",
@@ -813,6 +814,7 @@ if (enable_aurelian) {
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
     sources = [
+      "bootstrap/boot_register_browsertest.cc",
       "capability/cap_gated_cookies_browsertest.cc",
       "capability/cap_membrane_browsertest.cc",
       "federation/wss_peer_browsertest.cc",

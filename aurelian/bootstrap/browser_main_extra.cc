@@ -9,6 +9,10 @@
 #include <memory>
 #include <vector>
 
+#include <cstdlib>
+#include <string>
+
+#include "aurelian/federation/uds_register.h"
 #include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/membrane/embodiment_policy.h"
@@ -19,6 +23,7 @@
 #include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "velite/agentspaces-wire/agentspace.hpp"
 
@@ -28,6 +33,17 @@ namespace {
 int64_t NextTabId() {
   static int64_t next = 1;
   return next++;
+}
+
+// The generation-stable registration UDS Agrippa serves (the machine-fed
+// Frontinus pattern). A connectivity string read but never branched on — the
+// AGRIPPA_UDS_PATH override is the benign CLAUDE.md carveout (like PORT).
+std::string ResolveAgrippaSock() {
+  if (const char* p = std::getenv("AGRIPPA_UDS_PATH")) {
+    return p;
+  }
+  const char* home = std::getenv("HOME");
+  return std::string(home ? home : "/tmp") + "/.legion/agrippa.sock";
 }
 
 }  // namespace
@@ -43,6 +59,9 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   // layer). Erected by the one-shot install; owned via the C-API.
   ChromeRoot* root = nullptr;
   std::unique_ptr<TabsHandleImpl> tabs_handle;
+  // C9 — the machine-federation register-in (dials Agrippa's UDS, registers the
+  // `chrome` facet; no inbound port). Stopped on teardown (dtor → Stop()).
+  std::unique_ptr<UdsRegister> uds_register;
 
   // tab_id -> impl (owned here; registry in tab_handle.cc mirrors)
   std::map<content::WebContents*, std::unique_ptr<TabHandleImpl>> tab_impls;
@@ -153,6 +172,32 @@ void BrowserMainExtra::PostCreateThreads() {
   std::string identity_result = RootDispatch(impl_->root, "__getIdentity");
   LOG(WARNING) << "[aurelian] legion://chrome/ install-membrane sealed; "
                << "__getIdentity=" << identity_result;
+
+  // 5. C9 — register the SEALED chrome facet INTO Agrippa over the local UDS
+  //    (AURELIAN-DESIGN §3.6/§13; the machine-fed Frontinus pattern). Aurelian
+  //    opens NO inbound network port; the hub forwards a controller's leaf asks
+  //    back as dispatchAt against the sealed root. A missing hub is fail-soft —
+  //    the browser still works, just unregistered until the hub is up.
+  //    Forwarded asks arrive on UdsRegister's serve thread, but browser handles
+  //    are UI-thread-affine, so dispatch is refused off the UI thread (returns
+  //    broken) rather than touching a browser object off-thread (a crash); the
+  //    UI-thread hop for forwarded asks is the next slice (C9-forward-threading).
+  //    The register handshake itself invokes no dispatch, so it is fully live.
+  ChromeRoot* sealed_root = impl_->root;
+  impl_->uds_register = std::make_unique<UdsRegister>();
+  const std::string sock = ResolveAgrippaSock();
+  const bool dialed = impl_->uds_register->Start(
+      sock, "chrome", "aurelian-browser",
+      [sealed_root](const std::string& path) -> std::string {
+        if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+          return "broken:ui-hop-pending";
+        }
+        return RootDispatch(sealed_root, path);
+      });
+  LOG(WARNING) << "[aurelian] machine-hub register "
+               << (dialed ? "dialed + registered facet chrome over"
+                          : "no hub at")
+               << " " << sock;
 }
 
 void BrowserMainExtra::PreBrowserStart() {
