@@ -8,7 +8,9 @@ group("asmodeus_all") {
   deps = [
     ":asmodeus",
     ":asmodeus_coordinator",
-    "native_agent:asmodeus_agent",
+    # native_agent:asmodeus_agent retired 2026-06-04 (RETIRED.md — ported into
+    # Cicero; native_agent/BUILD.gn deleted). The dangling dep broke `gn gen`
+    # for the whole fork; removed to complete the retirement + unblock builds.
     "meeting_cli:asmodeus_meeting",
   ]
 }
