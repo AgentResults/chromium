@@ -386,6 +386,16 @@ void StartDownload(content::BrowserContext* ctx, const std::string& url) {
   dm->DownloadUrl(std::move(params));
 }
 
+bool CancelDownload(content::BrowserContext* ctx, uint32_t id) {
+  auto* dm = ctx->GetDownloadManager();
+  download::DownloadItem* item = dm ? dm->GetDownload(id) : nullptr;
+  if (!item) {
+    return false;
+  }
+  item->Cancel(/*user_cancel=*/true);
+  return true;
+}
+
 std::vector<DownloadInfo> GetDownloads(content::BrowserContext* ctx) {
   auto* dm = ctx->GetDownloadManager();
   content::DownloadManager::DownloadVector items;

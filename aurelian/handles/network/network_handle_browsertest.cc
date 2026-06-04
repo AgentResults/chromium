@@ -24,6 +24,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/download_test_observer.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -277,6 +278,66 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, RequestStreamCancelStops) {
       ui_test_utils::NavigateToURL(browser(), TestURL("/storage-page")));
   PumpFor(base::Milliseconds(300));
   EXPECT_EQ(frames.size(), count) << "frames kept arriving after cancel";
+}
+
+// --- Download cancel (deterministic via a held-open response) ---
+
+class AurelianDownloadCancelBrowserTest : public InProcessBrowserTest {
+ protected:
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    slow_ = std::make_unique<net::test_server::ControllableHttpResponse>(
+        embedded_test_server(), "/slow-dl");
+    ASSERT_TRUE(embedded_test_server()->Start());
+    ClearObservedRequests();
+  }
+
+  content::BrowserContext* GetBrowserContext() { return browser()->profile(); }
+
+  std::unique_ptr<net::test_server::ControllableHttpResponse> slow_;
+};
+
+IN_PROC_BROWSER_TEST_F(AurelianDownloadCancelBrowserTest, CancelInProgress) {
+  content::DownloadTestObserverInProgress observer(
+      GetBrowserContext()->GetDownloadManager(), /*wait_count=*/1);
+
+  StartDownload(GetBrowserContext(),
+                embedded_test_server()->GetURL("/slow-dl").spec());
+
+  // Hold the response open so the download stays in progress.
+  slow_->WaitForRequest();
+  slow_->Send(
+      "HTTP/1.1 200 OK\r\n"
+      "Content-Type: application/octet-stream\r\n"
+      "Content-Disposition: attachment; filename=\"slow.bin\"\r\n"
+      "Content-Length: 1000000\r\n\r\n"
+      "partial-body");
+  // (No Done() — the download will not complete.)
+  observer.WaitForFinished();  // wait until the download is in-progress
+
+  // Find the in-progress download's id.
+  uint32_t id = 0;
+  bool found = false;
+  for (const auto& dl : GetDownloads(GetBrowserContext())) {
+    if (dl.url.find("/slow-dl") != std::string::npos) {
+      id = dl.id;
+      found = true;
+    }
+  }
+  ASSERT_TRUE(found) << "in-progress download not observed";
+
+  // Cancel it through the handle.
+  EXPECT_TRUE(CancelDownload(GetBrowserContext(), id));
+
+  bool cancelled = false;
+  for (const auto& dl : GetDownloads(GetBrowserContext())) {
+    if (dl.id == id && dl.state == "cancelled") cancelled = true;
+  }
+  EXPECT_TRUE(cancelled) << "download was not cancelled";
+
+  // Cancelling an unknown id fails.
+  EXPECT_FALSE(CancelDownload(GetBrowserContext(), 999999));
 }
 
 // --- Cookie tests ---

@@ -111,6 +111,9 @@ struct DownloadInfo {
 void StartDownload(content::BrowserContext* ctx, const std::string& url);
 std::vector<DownloadInfo> GetDownloads(content::BrowserContext* ctx);
 
+// Cancels the download with `id`. Returns false if no such download. UI thread.
+bool CancelDownload(content::BrowserContext* ctx, uint32_t id);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_NETWORK_NETWORK_HANDLE_H_
