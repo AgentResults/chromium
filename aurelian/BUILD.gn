@@ -87,6 +87,24 @@ if (enable_aurelian) {
     ]
   }
 
+  # System info: browser + renderer process counts (C15.a). No RTTI.
+  source_set("aurelian_system") {
+    sources = [
+      "handles/browser/system_handle.cc",
+      "handles/browser/system_handle.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # Tab groups group / query / ungroup (C13.c). No RTTI.
   source_set("aurelian_tabgroups") {
     sources = [
@@ -502,6 +520,7 @@ if (enable_aurelian) {
       "handles/browser/input_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
+      "handles/browser/system_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
       "handles/browser/tabgroups_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
@@ -527,6 +546,7 @@ if (enable_aurelian) {
       ":aurelian_permissions",
       ":aurelian_process",
       ":aurelian_streams",
+      ":aurelian_system",
       ":aurelian_tabgroups",
       "//aurelian/public/mojom",
       "//base",
