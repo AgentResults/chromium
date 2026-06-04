@@ -39,4 +39,18 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CdpCompatCommand) {
       << "expected Runtime.evaluate to return 42; got: " << resp;
 }
 
+IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CapturesCdpEvent) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<title>evt</title>")));
+
+  // Enable Runtime, evaluate a console.log, capture the consoleAPICalled event.
+  std::string evt = CaptureCdpEvent(
+      GetWC(), "Runtime.enable", "Runtime.evaluate",
+      "{\"expression\":\"console.log('cdp-evt-42')\"}",
+      "Runtime.consoleAPICalled");
+
+  EXPECT_NE(evt.find("consoleAPICalled"), std::string::npos) << evt;
+  EXPECT_NE(evt.find("cdp-evt-42"), std::string::npos) << evt;
+}
+
 }  // namespace aurelian

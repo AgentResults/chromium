@@ -24,6 +24,18 @@ std::string SendCdpCommand(content::WebContents* wc,
                            const std::string& method,
                            const std::string& params_json = "{}");
 
+// Sends `enable_method` then `action_method`(`action_params`), and returns the
+// first received CDP EVENT message whose text contains `event_method` (events
+// have no request id). Returns "{"error":...}" on failure/timeout. Useful for
+// capturing protocol events (e.g. Runtime.consoleAPICalled) rather than
+// command responses.
+std::string CaptureCdpEvent(content::WebContents* wc,
+                            const std::string& enable_method,
+                            const std::string& action_method,
+                            const std::string& action_params,
+                            const std::string& event_method,
+                            int timeout_ms = 10000);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_DEVTOOLS_HANDLE_H_
