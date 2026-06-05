@@ -261,4 +261,44 @@ IN_PROC_BROWSER_TEST_F(AurelianCapBootAnchorBrowserTest,
       << "a chain not rooted at the boot anchor must be refused: " << bad;
 }
 
+// AU-CAP-PROV-TEST — a DEDICATED test of CapAnchorProvisioner's documented
+// wrong-sized-anchor no-op (header: "A wrong-sized anchor makes this a no-op (the
+// membrane simply never gains an anchor)"). A MALFORMED boot anchor must NOT be
+// provisioned onto the membrane, so EVERY cap — even one correctly signed by the
+// real operator key — fails closed. This proves the provisioner validates the
+// anchor before SetTrustAnchor (a malformed boot key cannot silently grant). The
+// positive path is the sibling BootAnchorEnforcesSignedCapAndRefusesForgery.
+class AurelianCapBootAnchorWrongSizeBrowserTest : public AurelianCapBrowserTest {
+ protected:
+  void SetUpInProcessBrowserTestFixture() override {
+    AurelianCapBrowserTest::SetUpInProcessBrowserTestFixture();
+    // 16 hex bytes = wrong size (the anchor must be a 32-byte Ed25519 pubkey).
+    ::setenv("AURELIAN_CAP_ANCHOR", "00112233445566778899aabbccddeeff",
+             /*overwrite=*/1);
+  }
+  void TearDownInProcessBrowserTestFixture() override {
+    ::unsetenv("AURELIAN_CAP_ANCHOR");
+    AurelianCapBrowserTest::TearDownInProcessBrowserTestFixture();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(AurelianCapBootAnchorWrongSizeBrowserTest,
+                       WrongSizedBootAnchorNoOpsSoCapsFailClosed) {
+  Navigate();
+  mojo::AssociatedRemote<mojom::AurelianWire> wire;
+  GetWire(&wire);  // NO ProvisionAnchor; the boot provisioner saw a malformed anchor.
+
+  std::string node = QueryFirstNodeId(&wire);
+  ASSERT_FALSE(node.empty());
+
+  // A cap correctly signed by the REAL operator anchor is still refused: the
+  // provisioner no-op'd on the malformed boot key, so the membrane never gained
+  // an anchor and fails closed (a bad boot key cannot accidentally grant access).
+  std::vector<CapLink> good = Grant("mode=read", /*expires=*/0);
+  std::string out = DispatchWithCap(&wire, good, "dom.node.text", node);
+  EXPECT_NE(out.find("cap-untrusted-anchor"), std::string::npos)
+      << "a wrong-sized boot anchor must no-op -> membrane anchorless -> fail closed: "
+      << out;
+}
+
 }  // namespace aurelian
