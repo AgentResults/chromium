@@ -184,26 +184,37 @@ IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest, InterceptRuleAddRemove) {
 }
 
 IN_PROC_BROWSER_TEST_F(AurelianNetworkBrowserTest,
-                       InterceptModifiesResponse) {
-  // The "mock" action redirects the request to a URL serving the mock
-  // content. This proves the intercept can replace what the user sees.
-  // (Full body-replacement via URLLoaderFactory proxy is deferred to C6.)
+                       InterceptReplacesResponseBody) {
+  // AU-NET-BODY (#6): a "mock" rule with a body replaces the RESPONSE BODY in
+  // place — the URL is unchanged and the bytes the page renders are the mock,
+  // not the server's. This is real interception via the throttle's
+  // URLLoaderThrottle::Delegate::InterceptResponse splice (the mechanism the
+  // throttle's own TODO named), NOT a redirect to a second URL.
   InterceptRule rule;
   rule.url_pattern = "/mock-target";
   rule.action = "mock";
-  rule.redirect_url = TestURL("/hello").spec();  // serve hello content
+  rule.mock_body = "<html><body>AURELIAN MOCK BODY</body></html>";
+  rule.mock_content_type = "text/html";
   int rule_id = AddInterceptRule(rule);
   EXPECT_GT(rule_id, 0);
 
-  // Navigate to /mock-target — should be redirected to /hello.
+  // /mock-target serves "original server response"; the mock must win.
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), TestURL("/mock-target")));
   auto* wc = browser()->tab_strip_model()->GetActiveWebContents();
 
-  // The page should show /hello content, not the original /mock-target.
-  auto result =
-      content::EvalJs(wc, "document.body.textContent.trim()");
-  EXPECT_EQ(result.ExtractString(), "hello from server");
+  // The body the page rendered is the mock content...
+  EXPECT_EQ(
+      content::EvalJs(wc, "document.body.textContent.trim()").ExtractString(),
+      "AURELIAN MOCK BODY");
+  // ...the original server content is gone...
+  EXPECT_EQ(
+      content::EvalJs(
+          wc, "document.body.textContent.indexOf('original server response')")
+          .ExtractInt(),
+      -1);
+  // ...and the request was NOT redirected — the body was replaced in place.
+  EXPECT_EQ(wc->GetLastCommittedURL(), TestURL("/mock-target"));
 
   EXPECT_TRUE(RemoveInterceptRule(rule_id));
 }

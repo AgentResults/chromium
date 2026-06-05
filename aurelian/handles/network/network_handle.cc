@@ -10,19 +10,33 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/storage_partition.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "mojo/public/cpp/system/data_pipe.h"
+#include "mojo/public/cpp/system/data_pipe_drainer.h"
+#include "mojo/public/cpp/system/data_pipe_producer.h"
+#include "mojo/public/cpp/system/string_data_source.h"
 #include "net/base/net_errors.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_options.h"
 #include "net/cookies/cookie_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
+#include "services/network/public/mojom/url_loader.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 namespace aurelian {
@@ -132,6 +146,117 @@ class RequestSubscriptionImpl : public RequestSubscription {
   std::unique_ptr<RequestSink> sink_;
 };
 
+// A synthetic URLLoader spliced into the live load by InterceptResponse to
+// replace the response BODY in place. It implements both halves of the
+// loader<->client contract: it is the URLLoader the destination (renderer)
+// now talks to, and the URLLoaderClient that receives the original network
+// loader's residual events. The original body is drained and discarded; the
+// destination reads the mock bytes from a fresh data pipe instead.
+//
+// Modeled on extensions/renderer/extension_localization_throttle.cc's
+// ExtensionLocalizationURLLoader (the canonical in-tree consumer of
+// URLLoaderThrottle::Delegate::InterceptResponse).
+class BodyMockURLLoader : public network::mojom::URLLoaderClient,
+                          public network::mojom::URLLoader,
+                          public mojo::DataPipeDrainer::Client {
+ public:
+  BodyMockURLLoader(
+      std::string mock_body,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> destination_client)
+      : mock_body_(std::move(mock_body)),
+        destination_client_(std::move(destination_client)) {}
+  ~BodyMockURLLoader() override = default;
+
+  void Start(
+      mojo::PendingRemote<network::mojom::URLLoader> source_loader,
+      mojo::PendingReceiver<network::mojom::URLLoaderClient>
+          source_client_receiver,
+      mojo::ScopedDataPipeConsumerHandle original_body,
+      mojo::ScopedDataPipeProducerHandle producer_handle) {
+    source_loader_.Bind(std::move(source_loader));
+    source_client_receiver_.Bind(std::move(source_client_receiver));
+
+    // Drain (and discard) the original network body so the source loader can
+    // complete cleanly without a connection-reset on a dropped consumer.
+    if (original_body) {
+      drainer_ =
+          std::make_unique<mojo::DataPipeDrainer>(this, std::move(original_body));
+    }
+
+    // Write the mock bytes into the pipe the destination now reads from.
+    auto producer =
+        std::make_unique<mojo::DataPipeProducer>(std::move(producer_handle));
+    auto data = std::make_unique<std::string>(mock_body_);
+    auto source = std::make_unique<mojo::StringDataSource>(
+        *data, mojo::StringDataSource::AsyncWritingMode::
+                   STRING_STAYS_VALID_UNTIL_COMPLETION);
+    mojo::DataPipeProducer* producer_ptr = producer.get();
+    producer_ptr->Write(
+        std::move(source),
+        base::BindOnce(
+            [](std::unique_ptr<mojo::DataPipeProducer> producer,
+               std::unique_ptr<std::string> data,
+               base::OnceCallback<void(MojoResult)> on_written,
+               MojoResult result) { std::move(on_written).Run(result); },
+            std::move(producer), std::move(data),
+            base::BindOnce(&BodyMockURLLoader::OnBodyWritten,
+                           weak_factory_.GetWeakPtr())));
+  }
+
+  // network::mojom::URLLoaderClient (residual events from the network loader;
+  // the response head already passed through, so a fresh response/redirect is
+  // never expected here).
+  void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr) override {}
+  void OnReceiveResponse(network::mojom::URLResponseHeadPtr,
+                         mojo::ScopedDataPipeConsumerHandle,
+                         std::optional<mojo_base::BigBuffer>) override {}
+  void OnReceiveRedirect(const net::RedirectInfo&,
+                         network::mojom::URLResponseHeadPtr) override {}
+  void OnUploadProgress(int64_t,
+                        int64_t,
+                        OnUploadProgressCallback ack) override {
+    std::move(ack).Run();
+  }
+  void OnTransferSizeUpdated(int32_t) override {}
+  void OnComplete(const network::URLLoaderCompletionStatus&) override {
+    // The original completion is irrelevant — the body is fully synthetic.
+  }
+
+  // network::mojom::URLLoader (control from the destination).
+  void FollowRedirect(const std::vector<std::string>&,
+                      const net::HttpRequestHeaders&,
+                      const net::HttpRequestHeaders&,
+                      const std::optional<GURL>&) override {}
+  void SetPriority(net::RequestPriority priority,
+                   int32_t intra_priority_value) override {
+    if (source_loader_)
+      source_loader_->SetPriority(priority, intra_priority_value);
+  }
+
+  // mojo::DataPipeDrainer::Client — discard the original body.
+  void OnDataAvailable(base::span<const uint8_t>) override {}
+  void OnDataComplete() override { drainer_.reset(); }
+
+ private:
+  void OnBodyWritten(MojoResult result) {
+    network::URLLoaderCompletionStatus status(
+        result == MOJO_RESULT_OK ? net::OK : net::ERR_INSUFFICIENT_RESOURCES);
+    if (result == MOJO_RESULT_OK) {
+      status.decoded_body_length = static_cast<int64_t>(mock_body_.size());
+      status.encoded_body_length = static_cast<int64_t>(mock_body_.size());
+      status.encoded_data_length = static_cast<int64_t>(mock_body_.size());
+    }
+    destination_client_->OnComplete(status);
+  }
+
+  const std::string mock_body_;
+  std::unique_ptr<mojo::DataPipeDrainer> drainer_;
+  mojo::Receiver<network::mojom::URLLoaderClient> source_client_receiver_{this};
+  mojo::Remote<network::mojom::URLLoader> source_loader_;
+  mojo::Remote<network::mojom::URLLoaderClient> destination_client_;
+  base::WeakPtrFactory<BodyMockURLLoader> weak_factory_{this};
+};
+
 // The Aurelian URLLoaderThrottle — applies intercept rules + observes.
 class AurelianURLThrottle : public blink::URLLoaderThrottle {
  public:
@@ -165,17 +290,79 @@ class AurelianURLThrottle : public blink::URLLoaderThrottle {
         request->url = GURL(rule.redirect_url);
         return;
       }
-      if (rule.action == "mock" && !rule.redirect_url.empty()) {
-        // Mock by redirecting to a URL that serves the mock content.
-        // Full body-replacement mock (InterceptResponse) deferred to C6
-        // URLLoaderFactory proxy.
-        request->url = GURL(rule.redirect_url);
-        return;
-      }
+      // A "mock" rule replaces the response BODY in place — handled at
+      // WillProcessResponse (the request must reach the response stage so the
+      // throttle can splice a synthetic loader via InterceptResponse).
     }
     // Default pass-through — no rules matched.
   }
 
+  void WillProcessResponse(const GURL& response_url,
+                           network::mojom::URLResponseHead* response_head,
+                           bool* defer) override {
+    // Find a body-mock rule matching this response URL.
+    InterceptRule matched;
+    bool found = false;
+    {
+      std::lock_guard<std::mutex> lock(RuleMutex());
+      for (const auto& rule : RuleStore()) {
+        if (rule.action == "mock" && !rule.mock_body.empty() &&
+            response_url.spec().find(rule.url_pattern) != std::string::npos) {
+          matched = rule;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found)
+      return;
+
+    // Rewrite the response head so the destination parses the mock correctly:
+    // its declared type and length must match the bytes we are about to serve.
+    response_head->mime_type = matched.mock_content_type;
+    response_head->content_length =
+        static_cast<int64_t>(matched.mock_body.size());
+    if (response_head->headers) {
+      response_head->headers->SetHeader("Content-Type",
+                                        matched.mock_content_type);
+      response_head->headers->RemoveHeader("Content-Length");
+      response_head->headers->SetHeader(
+          "Content-Length", base::NumberToString(matched.mock_body.size()));
+    }
+
+    // Fresh pipe: producer end we write the mock into; consumer end the
+    // destination reads from (InterceptResponse swaps it into place).
+    mojo::ScopedDataPipeConsumerHandle body;
+    mojo::ScopedDataPipeProducerHandle producer_handle;
+    if (mojo::CreateDataPipe(/*options=*/nullptr, producer_handle, body) !=
+        MOJO_RESULT_OK) {
+      return;  // Pass through unmodified on resource exhaustion.
+    }
+
+    mojo::PendingRemote<network::mojom::URLLoader> new_loader;
+    mojo::PendingRemote<network::mojom::URLLoaderClient> destination_client;
+    mojo::PendingReceiver<network::mojom::URLLoaderClient>
+        destination_client_receiver =
+            destination_client.InitWithNewPipeAndPassReceiver();
+    mojo::PendingRemote<network::mojom::URLLoader> source_loader;
+    mojo::PendingReceiver<network::mojom::URLLoaderClient> source_client_receiver;
+
+    auto loader = std::make_unique<BodyMockURLLoader>(
+        matched.mock_body, std::move(destination_client));
+    BodyMockURLLoader* loader_raw = loader.get();
+    // The loader lives as long as `new_loader` is connected (i.e. until the
+    // ThrottlingURLLoader that now holds it is torn down).
+    mojo::MakeSelfOwnedReceiver(std::move(loader),
+                                new_loader.InitWithNewPipeAndPassReceiver());
+
+    delegate_->InterceptResponse(std::move(new_loader),
+                                 std::move(destination_client_receiver),
+                                 &source_loader, &source_client_receiver, &body);
+    // After the swap, `body` holds the ORIGINAL response body consumer.
+    loader_raw->Start(std::move(source_loader),
+                      std::move(source_client_receiver), std::move(body),
+                      std::move(producer_handle));
+  }
 };
 
 }  // namespace
