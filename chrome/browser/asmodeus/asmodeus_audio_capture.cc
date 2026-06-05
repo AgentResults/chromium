@@ -8,7 +8,9 @@
 #include <cstring>
 
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/strcat.h"
 #include "content/public/browser/render_frame_host.h"
@@ -63,21 +65,22 @@ bool AsmodeusAudioCapture::Start(content::WebContents* web_contents,
       if (ctx.state === 'suspended') ctx.resume();
 
       const processor = ctx.createScriptProcessor(4096, 1, 1);
+      // The deprecated ScriptProcessor delivers a SILENT inputBuffer for a
+      // MediaStreamSource under headless/test rendering, so an rms computed here
+      // would always read 0. The LEVEL (rms/peak) is therefore taken from an
+      // AnalyserNode (which reads real-time time-domain data reliably, the same
+      // mechanism the virtual-mic SIT uses); the ScriptProcessor is kept only
+      // for the WAV chunk capture.
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
       processor.onaudioprocess = function(e) {
         if (!window.__asmodeusCapture.active) return;
         const data = e.inputBuffer.getChannelData(0);
         // Store as Int16 to save memory
         const int16 = new Int16Array(data.length);
-        let rms = 0;
         for (let i = 0; i < data.length; i++) {
           const v = Math.max(-1, Math.min(1, data[i]));
           int16[i] = Math.round(v * 32767);
-          rms += v * v;
-        }
-        rms = Math.sqrt(rms / data.length);
-        window.__asmodeusCapture.rms = rms;
-        if (rms > window.__asmodeusCapture.peak) {
-          window.__asmodeusCapture.peak = rms;
         }
         window.__asmodeusCapture.chunks.push(int16);
         window.__asmodeusCapture.totalSamples += data.length;
@@ -99,11 +102,11 @@ bool AsmodeusAudioCapture::Start(content::WebContents* web_contents,
         try {
           if (el.srcObject) {
             const src = ctx.createMediaStreamSource(el.srcObject);
-            src.connect(processor);
+            src.connect(processor); src.connect(analyser);
           } else if (el.captureStream) {
             const stream = el.captureStream();
             const src = ctx.createMediaStreamSource(stream);
-            src.connect(processor);
+            src.connect(processor); src.connect(analyser);
           }
         } catch(e) {}
       }
@@ -118,7 +121,7 @@ bool AsmodeusAudioCapture::Start(content::WebContents* web_contents,
               if (event.streams && event.streams[0]) {
                 try {
                   const src = ctx.createMediaStreamSource(event.streams[0]);
-                  src.connect(processor);
+                  src.connect(processor); src.connect(analyser);
                 } catch(e) {}
               }
               if (handler) handler.call(this, event);
@@ -136,7 +139,7 @@ bool AsmodeusAudioCapture::Start(content::WebContents* web_contents,
             if (event.streams && event.streams[0]) {
               try {
                 const src = ctx.createMediaStreamSource(event.streams[0]);
-                src.connect(processor);
+                src.connect(processor); src.connect(analyser);
               } catch(e) {}
             }
             fn.call(this, event);
@@ -146,10 +149,26 @@ bool AsmodeusAudioCapture::Start(content::WebContents* web_contents,
         return origAddEL.call(this, type, fn, opts);
       };
 
-      // Periodically try to hook media elements
+      // Hook existing elements immediately (the periodic re-hook catches ones
+      // added later) — otherwise no source is connected for the first 2s.
+      document.querySelectorAll('audio, video').forEach(hookElement);
       setInterval(function() {
         document.querySelectorAll('audio, video').forEach(hookElement);
       }, 2000);
+
+      // Poll the analyser for the live level (rms/peak). The analyser reads
+      // real-time time-domain data even when the ScriptProcessor input is
+      // silent, so this is the reliable level source (AU-AUDIO-LEVEL).
+      const __lvlBuf = new Float32Array(analyser.fftSize);
+      window.__asmodeusCapture.levelTimer = setInterval(function() {
+        if (!window.__asmodeusCapture.active) return;
+        analyser.getFloatTimeDomainData(__lvlBuf);
+        let s = 0;
+        for (let i = 0; i < __lvlBuf.length; i++) s += __lvlBuf[i] * __lvlBuf[i];
+        const r = Math.sqrt(s / __lvlBuf.length);
+        window.__asmodeusCapture.rms = r;
+        if (r > window.__asmodeusCapture.peak) window.__asmodeusCapture.peak = r;
+      }, 50);
     })();
   )JS";
 
@@ -183,18 +202,38 @@ AsmodeusAudioCapture::CaptureResult AsmodeusAudioCapture::Stop() {
         u"window.__asmodeusCapture.active = false;",
         base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
 
-    // Poll for data in chunks and write to WAV
-    // We need to use a callback-based approach to get the data
-    // For now, use synchronous evaluation (the data is already in memory)
-
-    // Get chunk count
+    // Bridge the JS-computed level back into C++. The page's onaudioprocess
+    // accumulates rms/peak in window.__asmodeusCapture; previously these were
+    // never read back, so current_rms_/peak_rms_ stayed 0 and GetLevel() / the
+    // CaptureResult.peak_rms always reported silence regardless of the audio
+    // actually captured (AU-AUDIO-LEVEL). Read them now via a result callback,
+    // pumping the loop for the async renderer round-trip.
+    base::RunLoop loop;
     main_frame->ExecuteJavaScriptForTests(
-        u"window.__asmodeusCaptureResult = {"
-        u"  chunks: window.__asmodeusCapture.chunks.length,"
-        u"  totalSamples: window.__asmodeusCapture.totalSamples,"
-        u"  peak: window.__asmodeusCapture.peak"
-        u"};",
-        base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
+        u"window.__asmodeusCapture"
+        u"  ? (window.__asmodeusCapture.rms + ',' + window.__asmodeusCapture.peak)"
+        u"  : '0,0'",
+        base::BindOnce(
+            [](double* rms_out, double* peak_out, base::OnceClosure done,
+               base::Value v) {
+              if (v.is_string()) {
+                const std::string& s = v.GetString();
+                size_t comma = s.find(',');
+                if (comma != std::string::npos) {
+                  double rms = 0, peak = 0;
+                  base::StringToDouble(s.substr(0, comma), &rms);
+                  base::StringToDouble(s.substr(comma + 1), &peak);
+                  *rms_out = rms;
+                  if (peak > *peak_out) {
+                    *peak_out = peak;
+                  }
+                }
+              }
+              std::move(done).Run();
+            },
+            &current_rms_, &peak_rms_, loop.QuitClosure()),
+        content::ISOLATED_WORLD_ID_GLOBAL);
+    loop.Run();
   }
 
   // Finalize WAV file
