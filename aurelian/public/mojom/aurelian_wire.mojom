@@ -29,8 +29,10 @@ interface AurelianWire {
   SetTrustAnchor(array<uint8> anchor_pub);
 };
 
-// Reverse channel for subscription frames. One frame each (opaque bytes
-// for now). Fire-and-forget.
+// Reverse channel for subscription frames. One frame each (opaque bytes for
+// now). Frame returns an (empty) ack so the producer observes delivery — the
+// substrate's native request/response model; the producer can pace on it and
+// know a subscriber received each frame (AU-WIRE-FAF).
 interface VeliteSink {
-  Frame(array<uint8> frame);
+  Frame(array<uint8> frame) => ();
 };

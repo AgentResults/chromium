@@ -10,7 +10,7 @@
 
 namespace aurelian {
 
-MojoStreamBridge::MojoStreamBridge(FrameCallback on_frame)
+MojoStreamBridge::MojoStreamBridge(OnFrameCallback on_frame)
     : on_frame_(std::move(on_frame)) {}
 
 MojoStreamBridge::~MojoStreamBridge() = default;
@@ -29,10 +29,14 @@ void MojoStreamBridge::OnReceiver(
   receiver_.Bind(std::move(receiver));
 }
 
-void MojoStreamBridge::Frame(const std::vector<uint8_t>& frame) {
+void MojoStreamBridge::Frame(const std::vector<uint8_t>& frame,
+                             FrameCallback callback) {
   if (on_frame_) {
     on_frame_.Run(frame);
   }
+  // Ack delivery — the producer's reply callback fires, so it observes that a
+  // subscriber received this frame (AU-WIRE-FAF).
+  std::move(callback).Run();
 }
 
 }  // namespace aurelian

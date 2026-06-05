@@ -10,11 +10,13 @@
 
 #include "aurelian/handles/streams/mojo_stream_bridge.h"
 
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "aurelian/public/mojom/aurelian_wire.mojom.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
@@ -96,6 +98,31 @@ IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, CrossProcessFrameDelivery) {
   EXPECT_EQ(frames[0], "tick-0");
   EXPECT_EQ(frames[1], "tick-1");
   EXPECT_EQ(frames[2], "tick-2");
+
+  // AU-WIRE-FAF: VeliteSink::Frame now carries an ack reply, so the producer
+  // OBSERVES delivery (it was fire-and-forget). The bridge auto-acks each
+  // received frame; the renderer's per-stream ack counter reflects confirmed
+  // deliveries, queryable via the `stream.acks` dispatch verb.
+  PumpFor(base::Milliseconds(300));  // let the acks flow back to the producer
+  std::string acks_reply;
+  {
+    base::RunLoop rl;
+    std::string msg = "stream.acks";
+    wire->Dispatch(
+        std::vector<uint8_t>(msg.begin(), msg.end()),
+        base::BindOnce(
+            [](base::RunLoop* l, std::string* out,
+               const std::vector<uint8_t>& r) {
+              *out = std::string(r.begin(), r.end());
+              l->Quit();
+            },
+            &rl, &acks_reply));
+    rl.Run();
+  }
+  int ack_count = acks_reply.empty() ? -1 : std::atoi(acks_reply.c_str());
+  EXPECT_GE(ack_count, 3) << "producer did not observe Frame acks "
+                             "(AU-WIRE-FAF); reply='"
+                          << acks_reply << "'";
 }
 
 IN_PROC_BROWSER_TEST_F(AurelianStreamBrowserTest, CancelStopsFrames) {

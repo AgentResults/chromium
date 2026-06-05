@@ -117,6 +117,8 @@ struct AurelianRenderFrameObserver::RendererStream {
   mojo::Remote<aurelian::mojom::VeliteSink> sink;
   base::RepeatingTimer timer;
   int counter = 0;
+  // Frames the subscriber has ack'd back (AU-WIRE-FAF) — proves delivery.
+  int acks = 0;
 };
 
 AurelianRenderFrameObserver::AurelianRenderFrameObserver(
@@ -374,7 +376,12 @@ std::string AurelianRenderFrameObserver::EvalString(const std::string& js) {
 
 void AurelianRenderFrameObserver::EmitTestFrame(RendererStream* stream) {
   std::string f = "tick-" + base::NumberToString(stream->counter++);
-  stream->sink->Frame(std::vector<uint8_t>(f.begin(), f.end()));
+  // AU-WIRE-FAF: the ack reply increments the stream's ack counter, so the
+  // producer observes that the subscriber received the frame. The reply is
+  // dropped if the stream (and its Remote) is torn down first, so &acks is safe.
+  stream->sink->Frame(
+      std::vector<uint8_t>(f.begin(), f.end()),
+      base::BindOnce([](int* acks) { ++(*acks); }, &stream->acks));
 }
 
 void AurelianRenderFrameObserver::EmitJoinedFrames(RendererStream* stream,
@@ -387,7 +394,9 @@ void AurelianRenderFrameObserver::EmitJoinedFrames(RendererStream* stream,
                             ? joined.substr(start)
                             : joined.substr(start, end - start);
     if (!piece.empty()) {
-      stream->sink->Frame(std::vector<uint8_t>(piece.begin(), piece.end()));
+      stream->sink->Frame(
+          std::vector<uint8_t>(piece.begin(), piece.end()),
+          base::BindOnce([](int* acks) { ++(*acks); }, &stream->acks));
     }
     if (end == std::string::npos) break;
     start = end + 1;
@@ -469,6 +478,17 @@ std::string AurelianRenderFrameObserver::DispatchVerb(
   // --- Identity ---
   if (verb == "describe" || verb == "__getIdentity")
     return "{\"origin\":\"renderer\",\"type\":\"frame\"}";
+
+  // --- Stream ack count (AU-WIRE-FAF): total VeliteSink::Frame acks the
+  // producer has observed back from subscribers, across all live streams.
+  // Proves the reverse channel's reply contract end-to-end. ---
+  if (verb == "stream.acks") {
+    int total = 0;
+    for (const auto& s : streams_) {
+      total += s->acks;
+    }
+    return base::NumberToString(total);
+  }
 
   // --- DOM: query ---
   if (verb == "dom.query") {

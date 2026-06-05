@@ -23,10 +23,10 @@ namespace aurelian {
 // which the renderer producer treats as cancel.
 class MojoStreamBridge : public aurelian::mojom::VeliteSink {
  public:
-  using FrameCallback =
+  using OnFrameCallback =
       base::RepeatingCallback<void(const std::vector<uint8_t>&)>;
 
-  explicit MojoStreamBridge(FrameCallback on_frame);
+  explicit MojoStreamBridge(OnFrameCallback on_frame);
   ~MojoStreamBridge() override;
 
   MojoStreamBridge(const MojoStreamBridge&) = delete;
@@ -37,13 +37,14 @@ class MojoStreamBridge : public aurelian::mojom::VeliteSink {
   void Subscribe(mojo::AssociatedRemote<aurelian::mojom::AurelianWire>& wire,
                  const std::string& stream);
 
-  // aurelian::mojom::VeliteSink:
-  void Frame(const std::vector<uint8_t>& frame) override;
+  // aurelian::mojom::VeliteSink: acks each frame (runs `callback`) so the
+  // renderer producer observes delivery.
+  void Frame(const std::vector<uint8_t>& frame, FrameCallback callback) override;
 
  private:
   void OnReceiver(mojo::PendingReceiver<aurelian::mojom::VeliteSink> receiver);
 
-  FrameCallback on_frame_;
+  OnFrameCallback on_frame_;
   mojo::Receiver<aurelian::mojom::VeliteSink> receiver_{this};
 };
 
