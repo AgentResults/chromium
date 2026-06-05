@@ -147,6 +147,29 @@ if (enable_aurelian) {
     ]
   }
 
+  # Federation-wire reply serializer. Light (velite + base only) so the root
+  # handle AND a fast unittest can share it. RTTI (touches Velite Value/Handle).
+  source_set("aurelian_wire_serialize") {
+    sources = [
+      "handles/root/wire_serialize.cc",
+      "handles/root/wire_serialize.h",
+    ]
+
+    deps = [
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # Navigable legion://chrome/ root handle (reachable-from-root). RTTI (Velite).
   source_set("aurelian_root") {
     sources = [
@@ -161,6 +184,7 @@ if (enable_aurelian) {
       ":aurelian_system",
       ":aurelian_tabs_overview",
       ":aurelian_tabstrip",
+      ":aurelian_wire_serialize",
       "//base",
       "//velite",
     ]
@@ -912,6 +936,7 @@ if (enable_aurelian) {
       "handles/media/media_seam_unittest.cc",
       "media/aurelian_virtual_mic_unittest.cc",
       "handles/profile/credentials_handle_unittest.cc",
+      "handles/root/wire_serialize_unittest.cc",
       "handles/streams/subscription_producer_unittest.cc",
     ]
 
@@ -922,6 +947,7 @@ if (enable_aurelian) {
       ":aurelian_streams",
       ":aurelian_uds_register",
       ":aurelian_virtual_mic",
+      ":aurelian_wire_serialize",
       "//base",
       "//base/test:run_all_unittests",
       "//base/test:test_support",

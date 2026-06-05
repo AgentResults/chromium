@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "aurelian/handles/root/wire_serialize.h"
+
 #include "aurelian/handles/browser/gpu_handle.h"
 #include "aurelian/handles/browser/system_handle.h"
 #include "aurelian/handles/browser/tabs_overview.h"
@@ -273,44 +275,11 @@ class ChromeRootHandle : public Handle {
   std::shared_ptr<Handle> media_;
 };
 
-// Serializes a settled handle's reply to a compact string. Objects emit a
-// minimal JSON object (string + int fields), matching the shapes the leaf
-// capabilities return today.
+// Serializes a settled handle's reply to the federation-wire string form. The
+// complete, escaping-correct implementation lives in wire_serialize.cc (shared
+// + unit-tested); this is a thin alias kept for call-site readability.
 std::string Serialize(const std::shared_ptr<Handle>& h) {
-  if (!h) {
-    return "broken:null";
-  }
-  if (h->state_kind() == StateKind::Broken) {
-    return std::string("broken:") + std::string(h->broken_reason());
-  }
-  const Value& v = h->resolved_value();
-  if (v.is_string()) {
-    return v.as_string();
-  }
-  if (v.is_int()) {
-    return std::to_string(v.as_int());
-  }
-  if (v.is_object()) {
-    std::string out = "{";
-    bool first = true;
-    for (const auto& [key, val] : v.as_object()) {
-      if (!first) {
-        out += ",";
-      }
-      first = false;
-      out += "\"" + key + "\":";
-      if (val.is_string()) {
-        out += "\"" + val.as_string() + "\"";
-      } else if (val.is_int()) {
-        out += std::to_string(val.as_int());
-      } else {
-        out += "null";
-      }
-    }
-    out += "}";
-    return out;
-  }
-  return "null";
+  return SerializeWireReply(h);
 }
 
 }  // namespace
