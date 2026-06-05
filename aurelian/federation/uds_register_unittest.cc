@@ -196,4 +196,101 @@ TEST(AurelianUdsRegisterTest, ForwardedDispatchAtResolvesViaDispatch) {
       << (o.value.is_string() ? o.value.as_string() : "<not-string>");
 }
 
+// AU-NAV-HANDLE: getResource{uri} returns a NAVIGABLE child handle (slot-
+// exported over the wire), so a controller WALKS the tree —
+// peer.getResource(legion://chrome/system).ask("info") — instead of only the
+// flat dispatchAt leaf. The returned slot-ref is asked with "info" and the leaf
+// value round-trips back over the same real UDS.
+TEST(AurelianUdsRegisterTest, ForwardedGetResourceReturnsNavigableChild) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  const std::string path = TempSock();
+  ::unlink(path.c_str());
+
+  velite::UdsListener listener;
+  ASSERT_TRUE(listener.listen(path.c_str()));
+
+  UdsRegister reg;
+  ASSERT_TRUE(reg.Start(
+      path, "chrome", "ed25519:chromeDH",
+      [](const std::string& p) -> std::string {
+        return std::string("answer:") + p;  // e.g. answer:system/info
+      }));
+
+  velite::UdsChannel server;
+  velite::UdsListener::AcceptOutcome out =
+      velite::UdsListener::AcceptOutcome::NoneReady;
+  for (int i = 0;
+       i < 2000 && out != velite::UdsListener::AcceptOutcome::Accepted; ++i) {
+    out = listener.accept(server, nullptr);
+    base::PlatformThread::Sleep(base::Milliseconds(1));
+  }
+  ASSERT_EQ(out, velite::UdsListener::AcceptOutcome::Accepted);
+
+  velite::UdsChannel* raw = &server;
+  auto hub_bs = HubBootstrap::make();
+  Dispatcher hub(hub_bs, [raw](const std::string& f) {
+    raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
+  });
+
+  uint8_t buf[65536];
+  auto pump_hub = [&]() {
+    for (;;) {
+      size_t n = 0;
+      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+          n > 0) {
+        hub.on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+      } else {
+        break;
+      }
+    }
+    hub.pump_pending_answers();
+  };
+  for (int i = 0; i < 2000 && hub_bs->registered_facet.empty(); ++i) {
+    pump_hub();
+    base::PlatformThread::Sleep(base::Milliseconds(1));
+  }
+  ASSERT_EQ(hub_bs->registered_facet, "chrome");
+
+  // 1) getResource{uri:legion://chrome/system} -> a navigable child (slot-ref).
+  uint32_t r_slot = hub.emit_ask(
+      0, "getResource",
+      Value::make_object(
+          {{"uri", Value(std::string("legion://chrome/system"))}}));
+  Dispatcher::AnswerOutcome ro;
+  for (int i = 0; i < 4000; ++i) {
+    pump_hub();
+    ro = hub.answer_outcome(r_slot);
+    if (ro.settled) {
+      break;
+    }
+    base::PlatformThread::Sleep(base::Milliseconds(1));
+  }
+  ASSERT_TRUE(ro.settled && ro.ok) << "getResource must settle";
+  ASSERT_TRUE(ro.value.is_slot_ref())
+      << "getResource must return a navigable child handle (slot-ref), not a "
+         "value";
+
+  // 2) ask the returned child slot "info" -> the leaf value, proving the walk.
+  uint32_t child_slot = ro.value.as_slot_ref().slot;
+  uint32_t i_slot = hub.emit_ask(child_slot, "info", Value{});
+  Dispatcher::AnswerOutcome io;
+  for (int i = 0; i < 4000; ++i) {
+    pump_hub();
+    io = hub.answer_outcome(i_slot);
+    if (io.settled) {
+      break;
+    }
+    base::PlatformThread::Sleep(base::Milliseconds(1));
+  }
+  reg.Stop();
+  ::unlink(path.c_str());
+
+  EXPECT_TRUE(io.settled && io.ok)
+      << "ask against the navigable child must settle over the UDS";
+  EXPECT_TRUE(io.value.is_string() &&
+              io.value.as_string() == "answer:system/info")
+      << "getResource(uri).info() must walk to the real leaf; got "
+      << (io.value.is_string() ? io.value.as_string() : "<not-string>");
+}
+
 }  // namespace aurelian

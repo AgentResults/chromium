@@ -26,6 +26,37 @@ using velite::agentspaces::Value;
 using velite::agentspaces::ValueHandle;
 using velite::agentspaces::wire::Dispatcher;
 
+// A ResolvedHandle alias to a target — the substrate's HandlePromise shape
+// (StateKind::ResolvedHandle + resolved_handle() == target), so the Dispatcher
+// EXPORTS the target as a slot over the wire and a controller gets a navigable
+// ref. (Local rather than velite::HandlePromise only because that header's
+// function-local static trips the fork's -Wexit-time-destructors; the wire
+// primitive adopted is identical.)
+class NavRef : public Handle {
+ public:
+  static std::shared_ptr<NavRef> make(std::shared_ptr<Handle> target) {
+    return std::shared_ptr<NavRef>(new NavRef(std::move(target)));
+  }
+  velite::agentspaces::StateKind state_kind() const override {
+    return velite::agentspaces::StateKind::ResolvedHandle;
+  }
+  const Value& resolved_value() const override { return empty_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return target_; }
+  std::string_view broken_reason() const override { return ""; }
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const Value& spec) override {
+    return target_ ? target_->ask(msg, spec)
+                   : ValueHandle::make_broken("legion://errors/InternalError");
+  }
+  void tell(std::string_view, const Value&) override {}
+
+ private:
+  explicit NavRef(std::shared_ptr<Handle> target)
+      : target_(std::move(target)) {}
+  std::shared_ptr<Handle> target_;
+  Value empty_;
+};
+
 constexpr size_t kRxBuffer = 65536;
 constexpr char kChromeUriPrefix[] = "legion://chrome";
 
@@ -48,12 +79,66 @@ std::string DerivePath(const std::string& uri, const std::string& verb) {
   return rel + "/" + verb;
 }
 
+// A navigable child handle bound to a legion://chrome/<uri>. Returned (slot-
+// exported) by getResource so a controller can WALK the tree over the wire:
+//   peer.getResource("legion://chrome/system").ask("info")   -> the leaf value
+// Adopts the substrate's proven slot-ref primitive (HandlePromise -> the
+// Dispatcher exports this as a slot; marius's MariusPeerHandle chains the same
+// way). A leaf ask resolves against the sealed root via the injected dispatch;
+// a further getResource yields a deeper NavHandle, so navigation composes.
+class NavHandle : public Handle {
+ public:
+  static std::shared_ptr<NavHandle> make(std::string uri,
+                                         ChromeDispatchFn dispatch) {
+    return std::shared_ptr<NavHandle>(
+        new NavHandle(std::move(uri), std::move(dispatch)));
+  }
+
+  velite::agentspaces::StateKind state_kind() const override {
+    return velite::agentspaces::StateKind::ResolvedValue;
+  }
+  const Value& resolved_value() const override { return self_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const Value& spec) override {
+    if (msg == "getResource") {
+      const Value* uv = spec.is_object() ? spec.object_get("uri") : nullptr;
+      if (!uv || !uv->is_string()) {
+        return ValueHandle::make_broken("legion://errors/InvalidArgument");
+      }
+      return NavRef::make(NavHandle::make(uv->as_string(), dispatch_));
+    }
+    if (msg == "__getIdentity") {
+      return ValueHandle::make(self_);
+    }
+    // Any other message is a leaf verb against THIS node's uri.
+    std::string reply =
+        dispatch_ ? dispatch_(DerivePath(uri_, std::string(msg)))
+                  : std::string("broken:no-dispatch");
+    return ValueHandle::make(Value(std::move(reply)));
+  }
+  void tell(std::string_view, const Value&) override {}
+
+ private:
+  NavHandle(std::string uri, ChromeDispatchFn dispatch)
+      : uri_(std::move(uri)),
+        dispatch_(std::move(dispatch)),
+        self_(uri_) {}
+
+  std::string uri_;
+  ChromeDispatchFn dispatch_;
+  Value self_;
+};
+
 // The slot-0 bootstrap Aurelian serves to Agrippa over the UDS. Agrippa forwards
 // a controller's leaf ask as dispatchAt{uri,verb,spec}; this resolves it against
 // the sealed legion://chrome/ root via the injected ChromeDispatchFn and returns
-// the serialized reply as a value (the same contract the WSS peer used). The
-// real fork surgery for handle-returning navigation is deferred; leaf dispatch
-// is the proven machine-fed path.
+// the serialized reply as a value (the contract the WSS peer used). getResource
+// {uri} additionally returns a NAVIGABLE child handle (slot-exported via
+// HandlePromise) so a controller walks the tree — peer.getResource(uri).info()
+// — over the register wire, adopting the substrate's proven slot-ref primitive.
 class AurelianBootstrap : public Handle {
  public:
   static std::shared_ptr<AurelianBootstrap> make(ChromeDispatchFn dispatch) {
@@ -83,6 +168,15 @@ class AurelianBootstrap : public Handle {
           dispatch_ ? dispatch_(DerivePath(uv->as_string(), vv->as_string()))
                     : std::string("broken:no-dispatch");
       return ValueHandle::make(Value(std::move(reply)));
+    }
+    if (msg == "getResource") {
+      // Handle-returning navigation: return a navigable child (slot-exported)
+      // bound to `uri`, so the controller can ask it (and chain further).
+      const Value* uv = spec.is_object() ? spec.object_get("uri") : nullptr;
+      if (!uv || !uv->is_string()) {
+        return ValueHandle::make_broken("legion://errors/InvalidArgument");
+      }
+      return NavRef::make(NavHandle::make(uv->as_string(), dispatch_));
     }
     if (msg == "__getIdentity") {
       return ValueHandle::make(self_);
