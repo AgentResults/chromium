@@ -5,9 +5,11 @@
 #include "aurelian/handles/browser/tabstrip_handle.h"
 
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
 namespace aurelian {
@@ -51,6 +53,39 @@ int TabCount(Browser* browser) {
 
 int ActiveTabIndex(Browser* browser) {
   return browser ? browser->tab_strip_model()->active_index() : -1;
+}
+
+int OpenTabGlobal(const std::string& url, bool foreground) {
+  return OpenTab(chrome::FindLastActive(), url, foreground);
+}
+
+bool ActivateTabGlobal(int index) {
+  return ActivateTab(chrome::FindLastActive(), index);
+}
+
+bool CloseTabGlobal(int index) {
+  return CloseTab(chrome::FindLastActive(), index);
+}
+
+int TabCountGlobal() {
+  return TabCount(chrome::FindLastActive());
+}
+
+int ActiveTabIndexGlobal() {
+  return ActiveTabIndex(chrome::FindLastActive());
+}
+
+std::string TabUrlGlobal(int index) {
+  Browser* browser = chrome::FindLastActive();
+  if (!browser) {
+    return std::string();
+  }
+  TabStripModel* model = browser->tab_strip_model();
+  if (index < 0 || index >= model->count()) {
+    return std::string();
+  }
+  content::WebContents* wc = model->GetWebContentsAt(index);
+  return wc ? wc->GetLastCommittedURL().spec() : std::string();
 }
 
 }  // namespace aurelian

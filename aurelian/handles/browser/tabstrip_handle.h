@@ -28,6 +28,19 @@ bool ActivateTab(Browser* browser, int index);
 int TabCount(Browser* browser);
 int ActiveTabIndex(Browser* browser);
 
+// Browser-global convenience wrappers — each resolves the last-active Browser*
+// (chrome::FindLastActive) internally, so the root's mounted `tabs` node can
+// reach the interactive verbs without holding a specific Browser*. They return
+// the same failure sentinels as the Browser*-taking forms when no browser is
+// active (-1 / false / "" / 0). UI thread.
+int OpenTabGlobal(const std::string& url, bool foreground);
+bool ActivateTabGlobal(int index);
+bool CloseTabGlobal(int index);
+int TabCountGlobal();
+int ActiveTabIndexGlobal();
+// Last-committed URL of the tab at `index` ("" on a bad index / no browser).
+std::string TabUrlGlobal(int index);
+
 }  // namespace aurelian
 
 #endif  // AURELIAN_HANDLES_BROWSER_TABSTRIP_HANDLE_H_

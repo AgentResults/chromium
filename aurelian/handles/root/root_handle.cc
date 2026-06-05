@@ -11,9 +11,11 @@
 #include "aurelian/handles/browser/gpu_handle.h"
 #include "aurelian/handles/browser/system_handle.h"
 #include "aurelian/handles/browser/tabs_overview.h"
+#include "aurelian/handles/browser/tabstrip_handle.h"
 #include "aurelian/handles/media/media_handles.h"
 #include "aurelian/handles/media/media_seam.h"
 #include "aurelian/membrane/embodiment_policy.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -97,8 +99,54 @@ class GpuInfoHandle : public Handle {
   Value identity_{std::string("legion://chrome/gpu")};
 };
 
+// legion://chrome/tabs/<index> — a single live tab, reached by a controller
+// walking the root. The interactive verbs (activate / close) mutate the live
+// strip via the last-active browser; `url` reads its committed location. This
+// is the per-tab reach that AU-TAB-REACH wires up: tabstrip_handle built these
+// ops but, until mounted here, nothing could reach them.
+class MountedTabHandle : public Handle {
+ public:
+  explicit MountedTabHandle(int index)
+      : index_(index),
+        identity_(std::string("legion://chrome/tabs/") +
+                  std::to_string(index)) {}
+
+  StateKind state_kind() const override { return StateKind::ResolvedValue; }
+  const Value& resolved_value() const override { return identity_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return ""; }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view msg,
+                                   const Value& /*spec*/) override {
+    if (msg == "__getIdentity") {
+      return ValueHandle::make(identity_);
+    }
+    if (msg == "activate") {
+      return ValueHandle::make(Value(std::string(
+          ActivateTabGlobal(index_) ? "ok" : "bad-index")));
+    }
+    if (msg == "close") {
+      // CloseTabGlobal refuses a bad index AND the browser's last tab.
+      return ValueHandle::make(Value(std::string(
+          CloseTabGlobal(index_) ? "ok" : "refused")));
+    }
+    if (msg == "url") {
+      return ValueHandle::make(Value(TabUrlGlobal(index_)));
+    }
+    return ValueHandle::make_broken("unknown-message");
+  }
+
+  void tell(std::string_view, const Value&) override {}
+
+ private:
+  int index_;
+  Value identity_;
+};
+
 // legion://chrome/tabs — the live, browser-wide tab strip reached from the
-// root (no Browser* held; queries BrowserList).
+// root (no Browser* held; queries BrowserList). Read verbs (count, activeUrl,
+// activeIndex) and the interactive `open`; a numeric child segment resolves to
+// the MountedTabHandle for that tab (activate / close / url).
 class TabsOverviewHandle : public Handle {
  public:
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -119,6 +167,21 @@ class TabsOverviewHandle : public Handle {
     }
     if (msg == "activeUrl") {
       return ValueHandle::make(Value(GetTabsOverview().active_url));
+    }
+    if (msg == "activeIndex") {
+      return ValueHandle::make(Value(ActiveTabIndexGlobal()));
+    }
+    // Interactive: open a new (foreground) tab; returns its index, -1 on
+    // failure. Param-free (about:blank) — the controller then navigates the tab
+    // via the per-tab handle / nav surface.
+    if (msg == "open") {
+      return ValueHandle::make(Value(OpenTabGlobal("about:blank", true)));
+    }
+    // A numeric child segment reaches a single live tab: legion://chrome/tabs/2
+    // -> MountedTabHandle(2), exposing activate / close / url.
+    int index = 0;
+    if (base::StringToInt(msg, &index)) {
+      return std::make_shared<MountedTabHandle>(index);
     }
     // No leaf handle exposes an unwrap path to its ambient reference; any
     // unknown message (including __ambient / unwrap probes) is refused.

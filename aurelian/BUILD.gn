@@ -119,6 +119,7 @@ if (enable_aurelian) {
       "//chrome/browser/ui:ui",
       "//chrome/browser/ui/tabs:tab_enums",
       "//chrome/browser/ui/tabs:tab_strip",
+      "//content/public/browser",
       "//url",
     ]
 
@@ -157,6 +158,7 @@ if (enable_aurelian) {
       ":aurelian_media",
       ":aurelian_system",
       ":aurelian_tabs_overview",
+      ":aurelian_tabstrip",
       "//base",
       "//velite",
     ]
@@ -964,6 +966,7 @@ if (enable_aurelian) {
       "handles/browser/print_handle_browsertest.cc",
       "handles/browser/profile_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
+      "handles/root/tab_reach_browsertest.cc",
       "membrane/install_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
