@@ -604,6 +604,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_root",
       "//base",
+      "//content/public/browser",
       "//velite",
     ]
 

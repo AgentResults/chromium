@@ -9,8 +9,11 @@
 #include <thread>
 
 #include "aurelian/handles/root/root_handle.h"
+#include "base/functional/bind.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#include "content/public/browser/browser_thread.h"
 #include "velite/channel.hpp"
 #include "velite/string_view.hpp"
 #include "velite/ws_channel.hpp"
@@ -33,7 +36,28 @@ std::string DispatchChromeRoot(const std::string& request) {
   // mounts — one model, served to remote peers. `request` is a slash-path
   // (e.g. "__getIdentity" or "system/info").
   static ChromeRoot* root = CreateChromeRoot();
-  return RootDispatch(root, request);
+  // The root's leaf handles touch UI-thread-affine browser state (system/info
+  // reads GetSystemInfo(), tabs reads BrowserList, …). The WSS serve thread is
+  // NOT the UI thread, so dispatching a real leaf there DCHECKs/crashes — hop to
+  // the UI thread for the dispatch (mirrors the C9 boot forward). In production
+  // the UI loop runs so the posted task executes; a test must keep the UI thread
+  // free (run the blocking client off it + spin the loop).
+  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+    return RootDispatch(root, request);
+  }
+  std::string result;
+  base::WaitableEvent done;
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](ChromeRoot* r, const std::string& req, std::string* out,
+             base::WaitableEvent* d) {
+            *out = RootDispatch(r, req);
+            d->Signal();
+          },
+          root, request, &result, &done));
+  done.Wait();
+  return result;
 }
 
 // ---------------------------------------------------------------------------
