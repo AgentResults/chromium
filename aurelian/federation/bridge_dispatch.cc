@@ -27,8 +27,9 @@ constexpr base::TimeDelta kBridgeDispatchTimeout = base::Seconds(15);
 // in a later turn).
 void DispatchOnUi(ChromeRoot* root,
                   const std::string& path,
+                  const std::string& serialized_spec,
                   std::shared_ptr<CompletionRecord> record) {
-  DispatchOutcome outcome = RootDispatch(root, path);
+  DispatchOutcome outcome = RootDispatch(root, path, serialized_spec);
   if (outcome.kind == DispatchOutcome::Kind::kPending) {
     CompletionBridge::Get().RegisterPending(std::move(record),
                                             std::move(outcome.answer));
@@ -39,15 +40,19 @@ void DispatchOnUi(ChromeRoot* root,
 
 }  // namespace
 
-std::string BridgeDispatch(ChromeRoot* root, const std::string& path) {
-  return BridgeDispatchWithTimeout(root, path, kBridgeDispatchTimeout);
+std::string BridgeDispatch(ChromeRoot* root,
+                           const std::string& path,
+                           const std::string& serialized_spec) {
+  return BridgeDispatchWithTimeout(root, path, serialized_spec,
+                                   kBridgeDispatchTimeout);
 }
 
 std::string BridgeDispatchWithTimeout(ChromeRoot* root,
                                       const std::string& path,
+                                      const std::string& serialized_spec,
                                       base::TimeDelta timeout) {
   if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
-    DispatchOutcome outcome = RootDispatch(root, path);
+    DispatchOutcome outcome = RootDispatch(root, path, serialized_spec);
     if (outcome.kind == DispatchOutcome::Kind::kCompleted) {
       return outcome.reply;
     }
@@ -60,8 +65,8 @@ std::string BridgeDispatchWithTimeout(ChromeRoot* root,
   std::shared_ptr<CompletionRecord> record =
       CompletionBridge::Get().CreateRecord();
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&DispatchOnUi, base::Unretained(root), path, record));
+      FROM_HERE, base::BindOnce(&DispatchOnUi, base::Unretained(root), path,
+                                serialized_spec, record));
   return CompletionBridge::Get().Wait(record, timeout);
 }
 

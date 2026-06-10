@@ -27,10 +27,14 @@
 namespace aurelian {
 
 // Resolves a slash-path leaf ask against the legion://chrome/ root and returns
-// the serialized reply — identical contract to RootDispatch / the WSS peer's
-// DispatchFn (e.g. "system/info", "__getIdentity"). Production wires
-// DispatchChromeRoot; tests pass a fake.
-using ChromeDispatchFn = std::function<std::string(const std::string& path)>;
+// the serialized reply (e.g. "system/info", "__getIdentity"). HS-3 (ACM-2w,
+// design section 5): the caller's spec crosses this seam SERIALIZED (canonical
+// JSON; empty string = no spec) and VALUE-ONLY — the seam refuses slot-ref-
+// bearing specs typed rather than silently flattening designation; the
+// serialized form keeps this header velite-free per the pimpl discipline.
+// Production wires the bootstrap's exported dispatch; tests pass a fake.
+using ChromeDispatchFn = std::function<std::string(
+    const std::string& path, const std::string& serialized_spec)>;
 
 class UdsRegister {
  public:

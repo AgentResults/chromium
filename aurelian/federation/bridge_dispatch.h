@@ -25,11 +25,16 @@ struct ChromeRoot;
 // On the UI thread itself an already-settled answer returns directly; a
 // Pending one is refused typed — a UI-thread caller cannot block on
 // settlement without nesting a UI loop, the exact shape HS-1 deletes.
-std::string BridgeDispatch(ChromeRoot* root, const std::string& path);
+// `serialized_spec` (HS-3, ACM-2w): the caller's spec in canonical-JSON
+// form, passed to the final hop only (empty = no spec).
+std::string BridgeDispatch(ChromeRoot* root,
+                           const std::string& path,
+                           const std::string& serialized_spec = {});
 
 // Same mechanism, caller-chosen wait budget (the timeout pin's seam).
 std::string BridgeDispatchWithTimeout(ChromeRoot* root,
                                       const std::string& path,
+                                      const std::string& serialized_spec,
                                       base::TimeDelta timeout);
 
 }  // namespace aurelian

@@ -8,8 +8,7 @@
 #include <cstdint>
 #include <thread>
 
-#include "aurelian/federation/bridge_dispatch.h"
-#include "aurelian/handles/root/root_handle.h"
+#include "aurelian/bootstrap/browser_main_extra.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "velite/channel.hpp"
@@ -30,17 +29,14 @@ void SleepBriefly() {
 }  // namespace
 
 std::string DispatchChromeRoot(const std::string& request) {
-  // The federation entry point reaches a navigable root. `request` is a
-  // slash-path (e.g. "__getIdentity" or "system/info"). KNOWN DEBT, on-plan:
-  // this lazy static is a SECOND un-sealed root, disconnected from the
-  // install membrane — ACM-2w deletes it and re-points this scaffold at the
-  // ONE ChromeDispatchFn exported over the installed root (design section 5
-  // round-3/4/5 contract; the ACM-2w counted-construction RED pins it).
-  static ChromeRoot* root = CreateChromeRoot();
-  // The WSS serve thread is NOT the UI thread; BridgeDispatch is the HS-1
-  // completion-signaled hop (ACM-2, design section 3) — same glue as the
-  // production UDS bring-up.
-  return BridgeDispatch(root, request);
+  // ACM-2w (design section 5): this scaffold consumes the ONE
+  // ChromeDispatchFn exported over the INSTALLED sealed root — its former
+  // lazy `static ChromeRoot*` was a second consumption of ambient authority
+  // (the counted-construction audit pins constructions at 1). `request` is
+  // a slash-path ("__getIdentity", "system/info"); the WSS wire carries no
+  // spec. The serve-thread hop is the HS-1 completion-signaled bridge
+  // inside the exported fn.
+  return InstalledChromeDispatch()(request, std::string());
 }
 
 // ---------------------------------------------------------------------------

@@ -174,6 +174,37 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
   DestroyChromeRoot(root);
 }
 
+// HS-3 (ACM-2w): the spec reaches the FINAL hop's ask through
+// RootDispatch's serialized-spec seam (design section 5 — intermediate hops
+// stay nullary navigation). getFeatureState REQUIRES a parameter: a dropped
+// spec is the host's own invalid-params error, never a result — so a
+// featureEnabled result proves the spec crossed every layer to the host.
+IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
+                       InvokeCarriesSpecToFinalHop) {
+  ChromeRoot* root = CreateChromeRoot();
+  ASSERT_NE(root, nullptr);
+
+  DispatchOutcome outcome =
+      RootDispatch(root, "cdp/SystemInfo/getFeatureState/invoke",
+                   "{\"featureState\":\"DIPS\"}");
+  ASSERT_EQ(outcome.kind, DispatchOutcome::Kind::kPending) << outcome.reply;
+  ASSERT_TRUE(WaitUntilSettled(outcome.answer));
+  ASSERT_EQ(outcome.answer->state_kind(), StateKind::ResolvedValue)
+      << "the spec did not reach the host: "
+      << outcome.answer->broken_reason();
+  std::string reply = SerializeWireReply(outcome.answer);
+  EXPECT_NE(reply.find("featureEnabled"), std::string::npos) << reply;
+
+  // A MALFORMED serialized spec is a typed refusal, never a silent
+  // empty-spec dispatch.
+  DispatchOutcome bad = RootDispatch(
+      root, "cdp/SystemInfo/getFeatureState/invoke", "{not json");
+  EXPECT_EQ(bad.kind, DispatchOutcome::Kind::kCompleted);
+  EXPECT_EQ(bad.reply.rfind("broken:spec-parse-failure", 0), 0u) << bad.reply;
+
+  DestroyChromeRoot(root);
+}
+
 // Lazy attach on the first invoke (plan ACM-2, review N8's testable half:
 // the browser target never closes, so detach-on-close rides ACM-3): no
 // session before the first invoke; ONE persistent session after it; the

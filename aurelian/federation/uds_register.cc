@@ -13,6 +13,7 @@
 #include "base/time/time.h"
 #include "velite/agentspaces-wire/dispatcher.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
+#include "velite/agentspaces-wire/json_marshal.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
 #include "velite/channel.hpp"
 #include "velite/uds_channel.hpp"
@@ -59,6 +60,50 @@ class NavRef : public Handle {
 
 constexpr size_t kRxBuffer = 65536;
 constexpr char kChromeUriPrefix[] = "legion://chrome";
+
+// HS-3 (ACM-2w, design section 5 round-5 review M5): the spec crosses the
+// dispatch seam SERIALIZED and VALUE-ONLY. A re-parsed serialized spec
+// cannot resolve wire slot refs (protocol.md section 4 is_slot_ref) — and an
+// in-process handle ref cannot cross a string seam at all — so designation-
+// bearing specs are REFUSED typed (the lossless-or-throw conversion
+// doctrine), never silently flattened.
+constexpr char kSlotRefInSpec[] = "legion://errors/SlotRefInSpec";
+
+bool CarriesHandleDesignation(const Value& v) {
+  if (v.is_slot_ref() || v.is_handle()) {
+    return true;
+  }
+  if (v.is_object()) {
+    for (const auto& [key, child] : v.as_object()) {
+      if (CarriesHandleDesignation(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (v.is_array()) {
+    for (const Value& child : v.as_array()) {
+      if (CarriesHandleDesignation(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+// Serializes a value-only spec to its canonical-JSON wire form (empty for a
+// null/absent spec). False iff the spec carries handle designation — the
+// caller answers the typed refusal.
+bool SerializeValueOnlySpec(const Value& spec, std::string* out) {
+  if (CarriesHandleDesignation(spec)) {
+    return false;
+  }
+  *out = spec.is_null()
+             ? std::string()
+             : velite::agentspaces::to_json(spec).to_string();
+  return true;
+}
 
 // Map a forwarded dispatchAt{uri,verb} to the slash-path RootDispatch expects:
 //   legion://chrome            + __getIdentity -> "__getIdentity"
@@ -113,9 +158,14 @@ class NavHandle : public Handle {
     if (msg == "__getIdentity") {
       return ValueHandle::make(self_);
     }
-    // Any other message is a leaf verb against THIS node's uri.
+    // Any other message is a leaf verb against THIS node's uri; the
+    // caller's spec rides along, serialized + value-only (HS-3).
+    std::string spec_json;
+    if (!SerializeValueOnlySpec(spec, &spec_json)) {
+      return ValueHandle::make_broken(kSlotRefInSpec);
+    }
     std::string reply =
-        dispatch_ ? dispatch_(DerivePath(uri_, std::string(msg)))
+        dispatch_ ? dispatch_(DerivePath(uri_, std::string(msg)), spec_json)
                   : std::string("broken:no-dispatch");
     return ValueHandle::make(Value(std::move(reply)));
   }
@@ -164,8 +214,16 @@ class AurelianBootstrap : public Handle {
       if (!uv || !uv->is_string() || !vv || !vv->is_string()) {
         return ValueHandle::make_broken("legion://errors/InvalidArgument");
       }
+      // HS-3: the dispatchAt frame's `spec` field (absent = no spec) crosses
+      // the seam serialized + value-only.
+      const Value* sv = spec.object_get("spec");
+      std::string spec_json;
+      if (sv && !SerializeValueOnlySpec(*sv, &spec_json)) {
+        return ValueHandle::make_broken(kSlotRefInSpec);
+      }
       std::string reply =
-          dispatch_ ? dispatch_(DerivePath(uv->as_string(), vv->as_string()))
+          dispatch_ ? dispatch_(DerivePath(uv->as_string(), vv->as_string()),
+                                spec_json)
                     : std::string("broken:no-dispatch");
       return ValueHandle::make(Value(std::move(reply)));
     }

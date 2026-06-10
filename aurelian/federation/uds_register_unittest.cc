@@ -31,6 +31,7 @@ namespace aurelian {
 namespace {
 
 using velite::agentspaces::Handle;
+using velite::agentspaces::SlotRef;
 using velite::agentspaces::Value;
 using velite::agentspaces::ValueHandle;
 using velite::agentspaces::StateKind;
@@ -83,7 +84,7 @@ TEST(AurelianUdsRegisterTest, DialsAndSendsRegisterMountFrame) {
 
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(path, "chrome", "ed25519:chromeDH",
-                        [](const std::string&) { return std::string("x"); }))
+                        [](const std::string&, const std::string&) { return std::string("x"); }))
       << "Start must connect to the UDS";
 
   // Accept the dialed connection + read the first frame (the register handshake).
@@ -131,7 +132,7 @@ TEST(AurelianUdsRegisterTest, ForwardedDispatchAtResolvesViaDispatch) {
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(
       path, "chrome", "ed25519:chromeDH",
-      [&dispatched](const std::string& p) -> std::string {
+      [&dispatched](const std::string& p, const std::string&) -> std::string {
         dispatched.store(true);
         return std::string("answer:") + p;  // e.g. answer:system/info
       }));
@@ -212,7 +213,7 @@ TEST(AurelianUdsRegisterTest, ForwardedGetResourceReturnsNavigableChild) {
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(
       path, "chrome", "ed25519:chromeDH",
-      [](const std::string& p) -> std::string {
+      [](const std::string& p, const std::string&) -> std::string {
         return std::string("answer:") + p;  // e.g. answer:system/info
       }));
 
@@ -291,6 +292,192 @@ TEST(AurelianUdsRegisterTest, ForwardedGetResourceReturnsNavigableChild) {
               io.value.as_string() == "answer:system/info")
       << "getResource(uri).info() must walk to the real leaf; got "
       << (io.value.is_string() ? io.value.as_string() : "<not-string>");
+}
+
+
+// ---------------------------------------------------------------------------
+// HS-3 (ACM-2w) — the spec-carrying wire (design section 5). RED A at the
+// exact seam round-2 review F4 named: AurelianBootstrap's dispatchAt read
+// only {uri, verb} (the spec field was never read), NavHandle leaf asks
+// discarded the caller's spec, and ChromeDispatchFn was string->string —
+// the keystone's "no-arg reads" ceiling was structural, not a test-scope
+// accident. The probe ChromeDispatchFn asserts what crosses the seam.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The same real-UDS + hub-Dispatcher shape as the tests above, factored:
+// the spec tests vary only the probe and the ask.
+struct SpecWireHarness {
+  std::string sock_path;
+  velite::UdsListener listener;
+  velite::UdsChannel server;
+  UdsRegister reg;
+  std::shared_ptr<HubBootstrap> hub_bs;
+  std::unique_ptr<Dispatcher> hub;
+  uint8_t buf[65536];
+
+  bool Start(ChromeDispatchFn dispatch) {
+    sock_path = TempSock();
+    ::unlink(sock_path.c_str());
+    if (!listener.listen(sock_path.c_str())) {
+      return false;
+    }
+    if (!reg.Start(sock_path, "chrome", "ed25519:chromeDH",
+                   std::move(dispatch))) {
+      return false;
+    }
+    velite::UdsListener::AcceptOutcome out =
+        velite::UdsListener::AcceptOutcome::NoneReady;
+    for (int i = 0;
+         i < 2000 && out != velite::UdsListener::AcceptOutcome::Accepted;
+         ++i) {
+      out = listener.accept(server, nullptr);
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+    if (out != velite::UdsListener::AcceptOutcome::Accepted) {
+      return false;
+    }
+    hub_bs = HubBootstrap::make();
+    velite::UdsChannel* raw = &server;
+    hub = std::make_unique<Dispatcher>(hub_bs, [raw](const std::string& f) {
+      raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
+    });
+    for (int i = 0; i < 2000 && hub_bs->registered_facet.empty(); ++i) {
+      Pump();
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+    return hub_bs->registered_facet == "chrome";
+  }
+
+  void Pump() {
+    for (;;) {
+      size_t n = 0;
+      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+          n > 0) {
+        hub->on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+      } else {
+        break;
+      }
+    }
+    hub->pump_pending_answers();
+  }
+
+  Dispatcher::AnswerOutcome AskSettled(uint32_t slot) {
+    Dispatcher::AnswerOutcome o;
+    for (int i = 0; i < 4000; ++i) {
+      Pump();
+      o = hub->answer_outcome(slot);
+      if (o.settled) {
+        break;
+      }
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+    return o;
+  }
+
+  ~SpecWireHarness() {
+    reg.Stop();
+    ::unlink(sock_path.c_str());
+  }
+};
+
+}  // namespace
+
+// dispatchAt{uri, verb:"invoke", spec:{expression:"6*7"}} delivers the spec
+// to the dispatch seam SERIALIZED (canonical JSON; velite-free seam).
+TEST(AurelianUdsRegisterTest, ForwardedDispatchAtCarriesSpecSerialized) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  SpecWireHarness h;
+  std::string seen_path;
+  std::string seen_spec = "<never-called>";
+  ASSERT_TRUE(h.Start(
+      [&](const std::string& p, const std::string& s) -> std::string {
+        seen_path = p;
+        seen_spec = s;
+        return std::string("ok");
+      }));
+
+  uint32_t slot = h.hub->emit_ask(
+      0, "dispatchAt",
+      Value::make_object(
+          {{"uri",
+            Value(std::string("legion://chrome/cdp/Runtime/evaluate"))},
+           {"verb", Value(std::string("invoke"))},
+           {"spec", Value::make_object(
+                        {{"expression", Value(std::string("6*7"))}})}}));
+  Dispatcher::AnswerOutcome o = h.AskSettled(slot);
+
+  EXPECT_TRUE(o.settled && o.ok) << o.reason;
+  EXPECT_EQ(seen_path, "cdp/Runtime/evaluate/invoke");
+  EXPECT_NE(seen_spec.find("expression"), std::string::npos)
+      << "the spec did not cross the seam serialized; dispatch saw: "
+      << seen_spec;
+  EXPECT_NE(seen_spec.find("6*7"), std::string::npos) << seen_spec;
+}
+
+// The NavHandle walk carries the caller's spec on leaf asks too —
+// getResource(uri).ask("invoke", spec) is the navigable form of the same
+// seam (round-2 verification: NavHandle leaf verbs discarded the spec).
+TEST(AurelianUdsRegisterTest, NavHandleLeafAskCarriesSpec) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  SpecWireHarness h;
+  std::string seen_spec = "<never-called>";
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string& s) -> std::string {
+        seen_spec = s;
+        return std::string("ok");
+      }));
+
+  uint32_t r_slot = h.hub->emit_ask(
+      0, "getResource",
+      Value::make_object(
+          {{"uri",
+            Value(std::string("legion://chrome/cdp/Runtime/evaluate"))}}));
+  Dispatcher::AnswerOutcome ro = h.AskSettled(r_slot);
+  ASSERT_TRUE(ro.settled && ro.ok) << ro.reason;
+  ASSERT_TRUE(ro.value.is_slot_ref());
+
+  uint32_t i_slot = h.hub->emit_ask(
+      ro.value.as_slot_ref().slot, "invoke",
+      Value::make_object({{"expression", Value(std::string("6*7"))}}));
+  Dispatcher::AnswerOutcome io = h.AskSettled(i_slot);
+
+  EXPECT_TRUE(io.settled && io.ok) << io.reason;
+  EXPECT_NE(seen_spec.find("expression"), std::string::npos)
+      << "NavHandle discarded the caller's spec; dispatch saw: " << seen_spec;
+  EXPECT_NE(seen_spec.find("6*7"), std::string::npos) << seen_spec;
+}
+
+// VALUE-ONLY seam (design section 5, round-5 review M5): a re-parsed
+// serialized spec cannot resolve wire slot refs, so a slot-ref-bearing spec
+// is REFUSED typed — never silently flattened into a dispatch.
+TEST(AurelianUdsRegisterTest, SlotRefBearingSpecRefusedTyped) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      }));
+
+  uint32_t slot = h.hub->emit_ask(
+      0, "dispatchAt",
+      Value::make_object(
+          {{"uri",
+            Value(std::string("legion://chrome/cdp/Runtime/evaluate"))},
+           {"verb", Value(std::string("invoke"))},
+           {"spec",
+            Value::make_object({{"sneaky", Value(SlotRef{7})}})}}));
+  Dispatcher::AnswerOutcome o = h.AskSettled(slot);
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok)
+      << "a slot-ref-bearing spec must be refused typed; it dispatched";
+  EXPECT_NE(o.reason.find("SlotRefInSpec"), std::string::npos) << o.reason;
+  EXPECT_FALSE(dispatched.load())
+      << "the spec was silently flattened into a dispatch";
 }
 
 }  // namespace aurelian

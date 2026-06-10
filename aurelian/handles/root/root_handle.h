@@ -57,7 +57,21 @@ struct DispatchOutcome {
 // reply returned as a DispatchOutcome (serialized when already settled;
 // the Pending handle itself when the answer is in flight). Examples:
 // "__getIdentity", "system/info", "cdp/Browser/getVersion/invoke". UI thread.
-DispatchOutcome RootDispatch(ChromeRoot* root, const std::string& path);
+//
+// HS-3 (ACM-2w, design section 5): `serialized_spec` is the caller's spec in
+// canonical-JSON form (empty = no spec — every intermediate hop stays nullary
+// navigation; only the FINAL hop's ask receives the parsed spec). Serialized
+// at this seam so the header stays velite-free. A malformed spec answers a
+// typed broken reply, never a silent empty-spec dispatch.
+DispatchOutcome RootDispatch(ChromeRoot* root,
+                             const std::string& path,
+                             const std::string& serialized_spec = {});
+
+// ACM-2w one-root audit observable (design section 5, review M1: counted
+// construction — no media observable can distinguish the roots). Counts every
+// ChromeRootHandle constructed in this process. Test-only USE; the counter
+// itself is a countable fork-delta line in the section-7 inventory.
+int ChromeRootConstructionCountForTesting();
 
 }  // namespace aurelian
 

@@ -23,6 +23,7 @@
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -64,7 +65,28 @@ std::vector<uint8_t> ResolveCapAnchor() {
   return bytes;
 }
 
+// The installed sealed root the ONE exported dispatch closes over — set by
+// the one-shot install, cleared at teardown so a post-teardown dispatch is
+// fail-closed ("broken:no-root"), never dangling.
+ChromeRoot* g_installed_root = nullptr;
+
 }  // namespace
+
+// HS-3/ACM-2w (design section 5): the ONE ChromeDispatchFn over the
+// INSTALLED root, constructed once — both wire bring-ups consume it; the
+// WSS scaffold's lazy second root is deleted.
+ChromeDispatchFn InstalledChromeDispatch() {
+  static const base::NoDestructor<ChromeDispatchFn> dispatch(
+      [](const std::string& path,
+         const std::string& serialized_spec) -> std::string {
+        ChromeRoot* root = g_installed_root;
+        if (!root) {
+          return "broken:no-root";
+        }
+        return BridgeDispatch(root, path, serialized_spec);
+      });
+  return *dispatch;
+}
 
 // ---------------------------------------------------------------------------
 // BrowserMainExtraImpl — owns the AgentSpace, handles, and observers
@@ -207,6 +229,9 @@ void BrowserMainExtra::PostCreateThreads() {
   //    capabilities under a sealed legion://chrome/ root.
   impl_->root = InstallChromeEmbodiment(*impl_->actor_space,
                                         EmbodimentPolicy::FullStandalone());
+  // HS-3: the installed root is what the ONE exported dispatch fn
+  // (InstalledChromeDispatch) resolves against from here to teardown.
+  g_installed_root = impl_->root;
 
   // 3. Create the tabs handle.
   impl_->tabs_handle = CreateTabsHandle();
@@ -225,19 +250,16 @@ void BrowserMainExtra::PostCreateThreads() {
   //    the browser still works, just unregistered until the hub is up.
   //    Forwarded asks arrive on UdsRegister's serve thread; browser handles
   //    are UI-thread affine (touching a WebContents off-thread crashes —
-  //    physics, not permission). BridgeDispatch is the HS-1
+  //    physics, not permission). The register-in consumes the ONE exported
+  //    dispatch fn (HS-3) whose BridgeDispatch is the HS-1
   //    completion-signaled hop (ACM-2, design section 3): the record is
   //    created on the serve thread pre-post, the posted UI task starts the
   //    dispatch and returns, and the serve thread waits on the record —
   //    Stop()-coverable, typed timeout, no UI-thread block.
-  ChromeRoot* sealed_root = impl_->root;
   impl_->uds_register = std::make_unique<UdsRegister>();
   const std::string sock = ResolveAgrippaSock();
   const bool dialed = impl_->uds_register->Start(
-      sock, "chrome", "aurelian-browser",
-      [sealed_root](const std::string& path) -> std::string {
-        return BridgeDispatch(sealed_root, path);
-      });
+      sock, "chrome", "aurelian-browser", InstalledChromeDispatch());
   LOG(WARNING) << "[aurelian] machine-hub register "
                << (dialed ? "dialed + registered facet chrome over"
                           : "no hub at")
@@ -271,6 +293,8 @@ void BrowserMainExtra::PostMainMessageLoopRun() {
   // be signalled by a completion — mark every live record shutdown and
   // signal BEFORE the teardown below joins the serve threads.
   CompletionBridge::Get().Stop();
+  // The exported dispatch goes fail-closed before its root is destroyed.
+  g_installed_root = nullptr;
   // Tear down before the browser shuts down.
   impl_.reset();
 }

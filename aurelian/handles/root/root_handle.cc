@@ -4,6 +4,7 @@
 
 #include "aurelian/handles/root/root_handle.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
+#include "velite/agentspaces-wire/json_marshal.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
 
 namespace aurelian {
@@ -197,6 +199,12 @@ class TabsOverviewHandle : public Handle {
   Value identity_{std::string("legion://chrome/tabs")};
 };
 
+// ACM-2w one-root audit observable: every ChromeRootHandle construction in
+// this process, counted (design section 5 — the WSS scaffold's lazy second
+// root was a second consumption of ambient authority; the counter is what
+// the RED pins at 1).
+std::atomic<int> g_chrome_root_constructions{0};
+
 // legion://chrome/ — the navigable root and the install-membrane's only
 // ingress. A capability child is mounted ONLY when the install policy allows
 // it (the seal, AURELIAN-DESIGN.md §4.5); an unauthorised reach to ambient
@@ -205,6 +213,7 @@ class ChromeRootHandle : public Handle {
  public:
   explicit ChromeRootHandle(EmbodimentPolicy policy)
       : policy_(std::move(policy)) {
+    g_chrome_root_constructions.fetch_add(1, std::memory_order_relaxed);
     // The media surface holds state (buffered frames, peer-audio
     // subscriptions) so it MUST be a persistent child, not minted fresh per
     // ask. Wired to the process-global MediaSeam the content-layer capture
@@ -319,7 +328,13 @@ void DestroyChromeRoot(ChromeRoot* root) {
   delete root;
 }
 
-DispatchOutcome RootDispatch(ChromeRoot* root, const std::string& path) {
+int ChromeRootConstructionCountForTesting() {
+  return g_chrome_root_constructions.load(std::memory_order_relaxed);
+}
+
+DispatchOutcome RootDispatch(ChromeRoot* root,
+                             const std::string& path,
+                             const std::string& serialized_spec) {
   DispatchOutcome out;
   if (!root || !root->handle) {
     out.reply = "broken:no-root";
@@ -334,6 +349,18 @@ DispatchOutcome RootDispatch(ChromeRoot* root, const std::string& path) {
     out.reply = Serialize(root->handle);
     return out;
   }
+  // HS-3 (ACM-2w): the serialized spec is parsed at this seam and handed to
+  // the FINAL hop only — intermediate hops stay nullary navigation. A
+  // malformed spec answers typed, never a silent empty-spec dispatch.
+  Value final_spec;
+  if (!serialized_spec.empty()) {
+    velite::json::JsonValue parsed;
+    if (!velite::json::JsonValue::parse(serialized_spec, parsed)) {
+      out.reply = "broken:spec-parse-failure";
+      return out;
+    }
+    final_spec = velite::agentspaces::from_json(parsed);
+  }
   std::shared_ptr<Handle> cur = root->handle;
   for (size_t i = 0; i + 1 < segments.size(); ++i) {
     cur = cur->ask(segments[i], Value());
@@ -342,7 +369,7 @@ DispatchOutcome RootDispatch(ChromeRoot* root, const std::string& path) {
       return out;
     }
   }
-  std::shared_ptr<Handle> answer = cur->ask(segments.back(), Value());
+  std::shared_ptr<Handle> answer = cur->ask(segments.back(), final_spec);
   if (answer && answer->state_kind() == StateKind::Pending) {
     // HS-1 (design section 3): the answer settles in a LATER UI turn — the
     // HS-1 session layer owns settlement delivery. SerializeWireReply never

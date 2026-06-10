@@ -781,10 +781,10 @@ if (enable_aurelian) {
     ]
 
     deps = [
-      ":aurelian_bridge_dispatch",
-      ":aurelian_root",
+      # The scaffold consumes the bootstrap's exported one-root dispatch
+      # (ACM-2w); its own lazy root is deleted.
+      ":aurelian",
       "//base",
-      "//content/public/browser",
       "//velite",
     ]
 
@@ -1212,6 +1212,7 @@ if (enable_aurelian) {
       "capability/cap_gated_cookies_browsertest.cc",
       "capability/cap_membrane_browsertest.cc",
       "catalog/session_context_browsertest.cc",
+      "federation/one_root_browsertest.cc",
       "federation/wss_peer_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/bookmarks_handle_browsertest.cc",
@@ -1255,6 +1256,7 @@ if (enable_aurelian) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
     deps = [
+      ":aurelian",
       ":aurelian_a11y",
       ":aurelian_audio",
       ":aurelian_bookmarks",
