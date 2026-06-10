@@ -17,6 +17,7 @@
 #include "aurelian/handles/media/media_handles.h"
 #include "aurelian/handles/media/media_seam.h"
 #include "aurelian/membrane/embodiment_policy.h"
+#include "aurelian/mirror/cdp_mirror.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
@@ -211,6 +212,13 @@ class ChromeRootHandle : public Handle {
     if (policy_.Allows("media")) {
       media_ = CreateMediaHandle(&MediaSeam::Get());
     }
+    // ACM-1: the CDP catalog mirror. Persistent for the same reason as
+    // media_ — the mirror is the ONE instance the design's residency rule
+    // names (section 3: per-target session state hangs off the mirror from
+    // ACM-2 on, so it must not be minted fresh per ask).
+    if (policy_.Allows("cdp")) {
+      cdp_ = CreateCdpMirror();
+    }
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -241,6 +249,12 @@ class ChromeRootHandle : public Handle {
         return ValueHandle::make_broken("out-of-scope");
       }
       return media_;
+    }
+    if (name == "cdp") {
+      if (!policy_.Allows("cdp") || !cdp_) {
+        return ValueHandle::make_broken("out-of-scope");
+      }
+      return cdp_;
     }
     if (name == "system" || name == "tabs" || name == "gpu") {
       if (!policy_.Allows(name)) {
@@ -273,6 +287,9 @@ class ChromeRootHandle : public Handle {
   EmbodimentPolicy policy_;
   // Persistent media surface (legion://chrome/media), or null when unsealed.
   std::shared_ptr<Handle> media_;
+  // Persistent CDP catalog mirror (legion://chrome/cdp), or null when
+  // unsealed (ACM-1).
+  std::shared_ptr<Handle> cdp_;
 };
 
 // Serializes a settled handle's reply to the federation-wire string form. The

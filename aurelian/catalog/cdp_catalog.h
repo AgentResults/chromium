@@ -49,9 +49,21 @@ class CdpCatalog {
 
   const std::vector<std::string>& domains() const { return domains_; }
 
+  // The descriptor entry for `domain`, or nullptr.
+  const base::DictValue* FindDomain(const std::string& domain) const;
+
   // The descriptor entry for `domain`.`command`, or nullptr.
   const base::DictValue* FindCommand(const std::string& domain,
                                        const std::string& command) const;
+
+  // The descriptor entry for `domain`'s event `event`, or nullptr.
+  const base::DictValue* FindEvent(const std::string& domain,
+                                     const std::string& event) const;
+
+  // The command / event names of `domain`, descriptor order (empty for a
+  // non-descriptor domain).
+  std::vector<std::string> CommandsOf(const std::string& domain) const;
+  std::vector<std::string> EventsOf(const std::string& domain) const;
 
   // The first command name of `domain` (descriptor order), or nullopt.
   std::optional<std::string> FirstCommandOf(const std::string& domain) const;

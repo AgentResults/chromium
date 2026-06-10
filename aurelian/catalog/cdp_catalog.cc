@@ -52,30 +52,81 @@ CdpCatalog::CdpCatalog()
   }
 }
 
-const base::DictValue* CdpCatalog::FindCommand(
-    const std::string& domain,
-    const std::string& command) const {
+const base::DictValue* CdpCatalog::FindDomain(
+    const std::string& domain) const {
   const base::ListValue* domain_list = descriptor_.FindList("domains");
   for (const base::Value& d : *domain_list) {
     const base::DictValue& dd = d.GetDict();
     const std::string* name = dd.FindString("domain");
-    if (!name || *name != domain) {
-      continue;
+    if (name && *name == domain) {
+      return &dd;
     }
-    const base::ListValue* cmds = dd.FindList("commands");
-    if (!cmds) {
-      return nullptr;
-    }
-    for (const base::Value& c : *cmds) {
-      const base::DictValue& cd = c.GetDict();
-      const std::string* cname = cd.FindString("name");
-      if (cname && *cname == command) {
-        return &cd;
-      }
-    }
-    return nullptr;
   }
   return nullptr;
+}
+
+namespace {
+
+// The named member of a domain's `commands` / `events` list, or nullptr.
+const base::DictValue* FindListMember(const base::DictValue* domain_dict,
+                                      const char* list_key,
+                                      const std::string& member) {
+  if (!domain_dict) {
+    return nullptr;
+  }
+  const base::ListValue* members = domain_dict->FindList(list_key);
+  if (!members) {
+    return nullptr;
+  }
+  for (const base::Value& m : *members) {
+    const base::DictValue& md = m.GetDict();
+    const std::string* mname = md.FindString("name");
+    if (mname && *mname == member) {
+      return &md;
+    }
+  }
+  return nullptr;
+}
+
+std::vector<std::string> ListMemberNames(const base::DictValue* domain_dict,
+                                         const char* list_key) {
+  std::vector<std::string> out;
+  if (!domain_dict) {
+    return out;
+  }
+  const base::ListValue* members = domain_dict->FindList(list_key);
+  if (!members) {
+    return out;
+  }
+  for (const base::Value& m : *members) {
+    const std::string* mname = m.GetDict().FindString("name");
+    if (mname) {
+      out.push_back(*mname);
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+const base::DictValue* CdpCatalog::FindCommand(
+    const std::string& domain,
+    const std::string& command) const {
+  return FindListMember(FindDomain(domain), "commands", command);
+}
+
+const base::DictValue* CdpCatalog::FindEvent(const std::string& domain,
+                                             const std::string& event) const {
+  return FindListMember(FindDomain(domain), "events", event);
+}
+
+std::vector<std::string> CdpCatalog::CommandsOf(
+    const std::string& domain) const {
+  return ListMemberNames(FindDomain(domain), "commands");
+}
+
+std::vector<std::string> CdpCatalog::EventsOf(const std::string& domain) const {
+  return ListMemberNames(FindDomain(domain), "events");
 }
 
 std::optional<std::string> CdpCatalog::FirstCommandOf(

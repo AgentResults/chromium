@@ -170,6 +170,30 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
+  # ACM-1: the CDP catalog mirror — ONE data-driven node class projecting
+  # the embedded descriptor (no per-domain code). RTTI (Velite handles).
+  source_set("aurelian_cdp_mirror") {
+    sources = [
+      "mirror/cdp_mirror.cc",
+      "mirror/cdp_mirror.h",
+    ]
+
+    deps = [
+      ":aurelian_catalog",
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # Navigable legion://chrome/ root handle (reachable-from-root). RTTI (Velite).
   source_set("aurelian_root") {
     sources = [
@@ -178,6 +202,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_cdp_mirror",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
       ":aurelian_media",
@@ -1081,6 +1106,7 @@ if (enable_aurelian) {
       "handles/root/root_handle_browsertest.cc",
       "handles/root/tab_reach_browsertest.cc",
       "membrane/install_browsertest.cc",
+      "mirror/cdp_mirror_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
@@ -1102,6 +1128,7 @@ if (enable_aurelian) {
       ":aurelian_bookmarks",
       ":aurelian_cap_browser",
       ":aurelian_catalog",
+      ":aurelian_cdp_mirror",
       ":aurelian_clipboard",
       ":aurelian_capability",
       ":aurelian_devtools",
