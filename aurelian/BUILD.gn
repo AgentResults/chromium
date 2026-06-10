@@ -964,6 +964,90 @@ if (enable_aurelian) {
     ]
   }
 
+  # ACM-S2 - the embedded CDP descriptor + derived session-context data
+  # (AURELIAN-GENERIC-CONTROL-TDD-PLAN Phase 0; design sections 2 and 4).
+  # The descriptor is embedded as DATA, regenerated with every Chromium
+  # roll, so the mirror tracks upstream by construction.
+  action("aurelian_catalog_embed") {
+    script = "catalog/embed_json.py"
+    inputs = [
+      "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json",
+      "catalog/session_context_table.json",
+      "catalog/command_overrides.json",
+      "catalog/renderer_served.json",
+    ]
+    outputs = [
+      "$target_gen_dir/catalog/embedded_catalog_data.cc",
+      "$target_gen_dir/catalog/embedded_catalog_data.h",
+    ]
+    args = [
+      "--protocol",
+      rebase_path(
+          "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json",
+          root_build_dir),
+      "--table",
+      rebase_path("catalog/session_context_table.json", root_build_dir),
+      "--overrides",
+      rebase_path("catalog/command_overrides.json", root_build_dir),
+      "--renderer-served",
+      rebase_path("catalog/renderer_served.json", root_build_dir),
+      "--out-cc",
+      rebase_path("$target_gen_dir/catalog/embedded_catalog_data.cc",
+                  root_build_dir),
+      "--out-h",
+      rebase_path("$target_gen_dir/catalog/embedded_catalog_data.h",
+                  root_build_dir),
+    ]
+    deps = [ "//third_party/blink/public/devtools_protocol:protocol_version" ]
+  }
+
+  # The build-time REGENERATION AUDIT: a fresh derivation from the three
+  # browser-process registration sites must equal the checked-in table -
+  # drift fails the build (design section 2 round-8; the planted-drift
+  # RED edits a row and watches this action fail).
+  action("aurelian_session_context_audit") {
+    script = "catalog/derive_session_context.py"
+    inputs = [
+      "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json",
+      "catalog/session_context_table.json",
+      "catalog/renderer_served.json",
+      "//content/browser/devtools/browser_devtools_agent_host.cc",
+      "//content/browser/devtools/render_frame_devtools_agent_host.cc",
+      "//chrome/browser/devtools/chrome_devtools_session.cc",
+    ]
+    outputs = [ "$target_gen_dir/catalog/session_context_audit.stamp" ]
+    args = [
+      "--src-root",
+      rebase_path("//", root_build_dir),
+      "--descriptor",
+      rebase_path(
+          "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json",
+          root_build_dir),
+      "--renderer-served",
+      rebase_path("catalog/renderer_served.json", root_build_dir),
+      "--check",
+      rebase_path("catalog/session_context_table.json", root_build_dir),
+      "--stamp",
+      rebase_path("$target_gen_dir/catalog/session_context_audit.stamp",
+                  root_build_dir),
+    ]
+    deps = [ "//third_party/blink/public/devtools_protocol:protocol_version" ]
+  }
+
+  # The catalog the ACM-1 mirror projects from.
+  source_set("aurelian_catalog") {
+    sources = [
+      "catalog/cdp_catalog.cc",
+      "catalog/cdp_catalog.h",
+    ]
+    sources += get_target_outputs(":aurelian_catalog_embed")
+    deps = [
+      ":aurelian_catalog_embed",
+      ":aurelian_session_context_audit",
+      "//base",
+    ]
+  }
+
   # Dedicated test binary — embedded-subsystem convention (like
   # extensions_browsertests, headless_browsertests).
   test("aurelian_browsertests") {
@@ -971,6 +1055,7 @@ if (enable_aurelian) {
       "bootstrap/boot_register_browsertest.cc",
       "capability/cap_gated_cookies_browsertest.cc",
       "capability/cap_membrane_browsertest.cc",
+      "catalog/session_context_browsertest.cc",
       "federation/wss_peer_browsertest.cc",
       "handles/browser/accessibility_handle_browsertest.cc",
       "handles/browser/bookmarks_handle_browsertest.cc",
@@ -1016,6 +1101,7 @@ if (enable_aurelian) {
       ":aurelian_audio",
       ":aurelian_bookmarks",
       ":aurelian_cap_browser",
+      ":aurelian_catalog",
       ":aurelian_clipboard",
       ":aurelian_capability",
       ":aurelian_devtools",

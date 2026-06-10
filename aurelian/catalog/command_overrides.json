@@ -1,0 +1,27 @@
+{
+ "_comment": [
+  "AUTHORED per-command override list (design section 2, layer 2).",
+  "Where the host gates individual commands inside a both-registered",
+  "handler, the override row makes the mirror refuse typed-with-redirect",
+  "at command granularity instead of passing the host's raw ServerError",
+  "through. Every row is LIVE-PINNED by a wrong-context invoke in",
+  "session_context_browsertest.cc - the host MUST refuse where a row",
+  "claims it does; drift between row and host fails the test, so this",
+  "list cannot rot silently. Commands without a row dispatch: the",
+  "mirror is exactly as wide as the host."
+ ],
+ "overrides": [
+  {
+   "command": "SystemInfo.getInfo",
+   "context": "browser-only",
+   "hostGate": "content system_info_handler.cc GetInfo - refuses non-browser sessions",
+   "pinnedBy": "AurelianSessionContextBrowserTest.OverrideGetInfoRefusedOnPageSession"
+  },
+  {
+   "command": "SystemInfo.getProcessInfo",
+   "context": "browser-only",
+   "hostGate": "content system_info_handler.cc GetProcessInfo - refuses non-browser sessions",
+   "pinnedBy": "AurelianSessionContextBrowserTest.OverrideGetProcessInfoRefusedOnPageSession"
+  }
+ ]
+}

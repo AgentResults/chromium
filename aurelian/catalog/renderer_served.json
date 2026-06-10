@@ -1,0 +1,12 @@
+{
+ "_comment": [
+  "Pin-verified corrections to the derived browser-only set (design",
+  "section 2 round-8: the pin is the arbiter, never the prose). A",
+  "domain lands here ONLY when the grep derivation classified it",
+  "browser-only but the live pin proved a page session serves it",
+  "(renderer-side or otherwise invisible to the three browser-process",
+  "registration sites). Each entry must name the pin run that proved",
+  "it. Empty means every derived browser-only row survived its pin."
+ ],
+ "domains": []
+}
