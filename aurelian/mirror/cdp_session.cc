@@ -1,0 +1,231 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "aurelian/mirror/cdp_session.h"
+
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "aurelian/federation/completion_bridge.h"
+#include "aurelian/mirror/cdp_agent_client.h"
+#include "aurelian/mirror/value_convert.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/values.h"
+#include "content/public/browser/browser_thread.h"
+#include "velite/agentspaces-wire/handle.hpp"
+#include "velite/agentspaces-wire/json_marshal.hpp"
+#include "velite/agentspaces-wire/value_handle.hpp"
+
+namespace aurelian {
+
+namespace {
+
+using velite::agentspaces::Handle;
+using velite::agentspaces::StateKind;
+using velite::agentspaces::Value;
+using velite::agentspaces::ValueHandle;
+
+// The pending answer handle (the four-state contract): Pending until the
+// session layer settles it on the UI thread — to the command's result value,
+// or Broken (a CDP error passes the host's own answer through, typed; a
+// closing target settles Broken per design section 3 detach-on-close).
+class PendingCdpAnswer : public Handle {
+ public:
+  static std::shared_ptr<PendingCdpAnswer> make() {
+    return std::shared_ptr<PendingCdpAnswer>(new PendingCdpAnswer());
+  }
+
+  StateKind state_kind() const override { return state_; }
+  const Value& resolved_value() const override { return value_; }
+  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
+  std::string_view broken_reason() const override { return reason_; }
+  // A transient answer, not an addressable mount — not persistable.
+  std::string sturdy_identity() const override { return std::string(); }
+
+  std::shared_ptr<Handle> ask_impl(std::string_view /*msg*/,
+                                   const Value& /*spec*/) override {
+    return ValueHandle::make_broken(
+        state_ == StateKind::Pending ? "answer-pending" : "unknown-message");
+  }
+  void tell(std::string_view, const Value&) override {}
+
+  void SettleValue(Value v) {
+    DCHECK(state_ == StateKind::Pending);
+    value_ = std::move(v);
+    state_ = StateKind::ResolvedValue;
+  }
+
+  void SettleBroken(std::string reason) {
+    DCHECK(state_ == StateKind::Pending);
+    reason_ = std::move(reason);
+    state_ = StateKind::Broken;
+  }
+
+ private:
+  PendingCdpAnswer() = default;
+
+  StateKind state_ = StateKind::Pending;
+  Value value_;
+  std::string reason_;
+};
+
+// ONE persistent session on one target: a long-lived client (the no-RTTI
+// content glue, cdp_agent_client) with monotonic request ids and an
+// id-keyed in-flight correlation map (design section 3 — the replacement
+// for the attach-wait-detach single-id one-shot). UI-confined.
+//
+// The protocol send is POSTED, not inline (worklog ACM-2): the fork's
+// browser-session host delivers the client callback ON THE DISPATCH STACK
+// (devtools_session.cc DispatchProtocolMessageToClient calls the client
+// directly — no post), so an inline send would settle synchronous commands
+// inside ask_impl, falsifying the design's premise that a completion
+// arrives in a later UI turn and making the plan's two-in-flight RED
+// unsatisfiable. One posted task per command keeps the contract uniform:
+// the invoke turn returns a Pending handle; settlement ALWAYS arrives in a
+// later turn via the client callback; no re-entrant settlement under a
+// mirror node's ask.
+class CdpSession {
+ public:
+  CdpSession() = default;
+
+  bool AttachToBrowserTarget() {
+    client_ = CdpAgentClient::CreateForBrowserTarget(
+        base::BindRepeating(&CdpSession::OnMessage, base::Unretained(this)),
+        base::BindOnce(&CdpSession::OnClosed, base::Unretained(this)));
+    return client_->Attach();
+  }
+
+  bool attached() const { return client_ && client_->attached(); }
+  size_t in_flight_count() const { return in_flight_.size(); }
+
+  std::shared_ptr<Handle> Invoke(const std::string& method,
+                                 const Value& params) {
+    std::string params_json;
+    if (params.is_null()) {
+      params_json = "{}";
+    } else if (params.is_object()) {
+      params_json = velite::agentspaces::to_json(params).to_string();
+    } else {
+      return ValueHandle::make_broken("invalid-params:not-an-object");
+    }
+
+    std::shared_ptr<PendingCdpAnswer> answer = PendingCdpAnswer::make();
+    const int id = next_id_++;
+    in_flight_.emplace(id, answer);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&CdpSession::SendFrame, weak_factory_.GetWeakPtr(),
+                       "{\"id\":" + std::to_string(id) + ",\"method\":\"" +
+                           method + "\",\"params\":" + params_json + "}"));
+    return answer;
+  }
+
+ private:
+  // The posted send (UI thread, the turn after the invoke). A session torn
+  // down in between already settled its in-flight entries Broken.
+  void SendFrame(const std::string& frame) {
+    if (client_ && client_->attached()) {
+      client_->Send(frame);
+    }
+  }
+
+  // The persistent client's message callback (UI thread): correlate by id,
+  // settle, notify any wire waiter.
+  void OnMessage(const std::string& message) {
+    std::optional<base::DictValue> reply =
+        base::JSONReader::ReadDict(message, base::JSON_PARSE_RFC);
+    if (!reply) {
+      return;
+    }
+    std::optional<int> id = reply->FindInt("id");
+    if (!id) {
+      // A CDP event — the subscribe fan-out is ACM-4's slice.
+      return;
+    }
+    auto it = in_flight_.find(*id);
+    if (it == in_flight_.end()) {
+      return;
+    }
+    std::shared_ptr<PendingCdpAnswer> answer = std::move(it->second);
+    in_flight_.erase(it);
+
+    if (const base::DictValue* error = reply->FindDict("error")) {
+      // The host's own refusal passes through, typed.
+      std::optional<std::string> error_json = base::WriteJson(*error);
+      answer->SettleBroken("cdp-error:" +
+                           error_json.value_or("(unserializable)"));
+    } else if (const base::DictValue* result = reply->FindDict("result")) {
+      answer->SettleValue(FromBaseDict(*result));
+    } else {
+      answer->SettleValue(Value());
+    }
+    CompletionBridge::Get().NotifySettled(answer);
+  }
+
+  // Detach-on-target-close (design section 3): session teardown settles
+  // every in-flight entry Broken. The browser target never closes; the
+  // page-target RED rides ACM-3.
+  void OnClosed() {
+    auto in_flight = std::move(in_flight_);
+    in_flight_.clear();
+    for (auto& [id, answer] : in_flight) {
+      answer->SettleBroken("cdp-session-closed");
+      CompletionBridge::Get().NotifySettled(answer);
+    }
+  }
+
+  std::unique_ptr<CdpAgentClient> client_;
+  int next_id_ = 1;
+  std::map<int, std::shared_ptr<PendingCdpAnswer>> in_flight_;
+  base::WeakPtrFactory<CdpSession> weak_factory_{this};
+};
+
+}  // namespace
+
+struct CdpSessionRegistry::Impl {
+  // The persistent browser-target session — lazily attached on the first
+  // invoke (hosts are lightweight until attached; sessions attach lazily,
+  // design section 2). ACM-3 grows the per-page-target map beside it.
+  std::unique_ptr<CdpSession> browser_session;
+};
+
+CdpSessionRegistry& CdpSessionRegistry::Get() {
+  static base::NoDestructor<CdpSessionRegistry> registry;
+  return *registry;
+}
+
+CdpSessionRegistry::CdpSessionRegistry() : impl_(std::make_unique<Impl>()) {}
+CdpSessionRegistry::~CdpSessionRegistry() = default;
+
+std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnBrowserTarget(
+    const std::string& method,
+    const Value& params) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!impl_->browser_session || !impl_->browser_session->attached()) {
+    auto session = std::make_unique<CdpSession>();
+    if (!session->AttachToBrowserTarget()) {
+      return ValueHandle::make_broken("cdp-attach-failed");
+    }
+    impl_->browser_session = std::move(session);
+  }
+  return impl_->browser_session->Invoke(method, params);
+}
+
+size_t CdpSessionRegistry::SessionCountForTesting() const {
+  return impl_->browser_session && impl_->browser_session->attached() ? 1 : 0;
+}
+
+size_t CdpSessionRegistry::InFlightCountForTesting() const {
+  return impl_->browser_session ? impl_->browser_session->in_flight_count()
+                                : 0;
+}
+
+}  // namespace aurelian

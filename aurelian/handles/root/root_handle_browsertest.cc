@@ -25,18 +25,18 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToRealCapability) {
   ASSERT_NE(root, nullptr);
 
   // The root answers its identity.
-  EXPECT_EQ(RootDispatch(root, "__getIdentity"), "legion://chrome/");
+  EXPECT_EQ(RootDispatch(root, "__getIdentity").reply, "legion://chrome/");
 
   // Walk root -> system -> info, reaching the REAL system capability: the
   // reported browser pid is this process.
-  std::string info = RootDispatch(root, "system/info");
+  std::string info = RootDispatch(root, "system/info").reply;
   EXPECT_NE(info.find("\"browserPid\":"), std::string::npos) << info;
   EXPECT_NE(info.find(std::to_string(base::Process::Current().Pid())),
             std::string::npos)
       << info;
 
   // An unknown child is broken.
-  EXPECT_NE(RootDispatch(root, "bogus").find("broken"), std::string::npos);
+  EXPECT_NE(RootDispatch(root, "bogus").reply.find("broken"), std::string::npos);
 
   DestroyChromeRoot(root);
 }
@@ -51,13 +51,13 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToTabsCapability) {
 
   // Walk root -> tabs -> count, reaching the REAL live tab strip: at least the
   // one tab this browser test opened.
-  std::string count = RootDispatch(root, "tabs/count");
+  std::string count = RootDispatch(root, "tabs/count").reply;
   int n = 0;
   ASSERT_TRUE(base::StringToInt(count, &n)) << "count not an int: " << count;
   EXPECT_GE(n, 1) << count;
 
   // The active tab's URL is reachable too and reflects where we navigated.
-  std::string active = RootDispatch(root, "tabs/activeUrl");
+  std::string active = RootDispatch(root, "tabs/activeUrl").reply;
   EXPECT_NE(active.find("data:text/html"), std::string::npos) << active;
 
   DestroyChromeRoot(root);
@@ -69,7 +69,7 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToGpuCapability) {
 
   // Walk root -> gpu -> info, reaching the REAL GpuDataManager: the serialized
   // GL renderer matches an independent read (so it holds on any GPU).
-  std::string info = RootDispatch(root, "gpu/info");
+  std::string info = RootDispatch(root, "gpu/info").reply;
   EXPECT_NE(info.find("\"glRenderer\":"), std::string::npos) << info;
   EXPECT_NE(info.find(GetGpuSummary().gl_renderer), std::string::npos) << info;
 
@@ -85,20 +85,20 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToMediaSurface) {
   ASSERT_NE(root, nullptr);
 
   // The media surface answers its identity through the sealed root.
-  EXPECT_EQ(RootDispatch(root, "media/__getIdentity"), "legion://chrome/media");
+  EXPECT_EQ(RootDispatch(root, "media/__getIdentity").reply, "legion://chrome/media");
 
   // Walk root -> media -> {camera,mic,peer-audio} -> describe: each advertises
   // its endowment contract (the bindable surface for Cicero §26).
-  EXPECT_NE(RootDispatch(root, "media/camera/describe").find("video_sink"),
+  EXPECT_NE(RootDispatch(root, "media/camera/describe").reply.find("video_sink"),
             std::string::npos)
-      << RootDispatch(root, "media/camera/describe");
-  EXPECT_NE(RootDispatch(root, "media/mic/describe").find("audio_sink"),
+      << RootDispatch(root, "media/camera/describe").reply;
+  EXPECT_NE(RootDispatch(root, "media/mic/describe").reply.find("audio_sink"),
             std::string::npos)
-      << RootDispatch(root, "media/mic/describe");
+      << RootDispatch(root, "media/mic/describe").reply;
   EXPECT_NE(
-      RootDispatch(root, "media/peer-audio/describe").find("audio_source"),
+      RootDispatch(root, "media/peer-audio/describe").reply.find("audio_source"),
       std::string::npos)
-      << RootDispatch(root, "media/peer-audio/describe");
+      << RootDispatch(root, "media/peer-audio/describe").reply;
 
   DestroyChromeRoot(root);
 }
@@ -110,8 +110,8 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, MediaSurfaceSealedOff) {
       CreateChromeRootWithPolicy(EmbodimentPolicy::WithCapabilities({"system"}));
   ASSERT_NE(root, nullptr);
 
-  EXPECT_NE(RootDispatch(root, "media").find("broken"), std::string::npos);
-  EXPECT_NE(RootDispatch(root, "media/camera/describe").find("broken"),
+  EXPECT_NE(RootDispatch(root, "media").reply.find("broken"), std::string::npos);
+  EXPECT_NE(RootDispatch(root, "media/camera/describe").reply.find("broken"),
             std::string::npos);
 
   DestroyChromeRoot(root);

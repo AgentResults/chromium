@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "aurelian/catalog/cdp_catalog.h"
+#include "aurelian/mirror/cdp_session.h"
+#include "aurelian/mirror/value_convert.h"
 #include "base/values.h"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -33,48 +35,6 @@ constexpr char kTypeDomain[] = "legion://types/CdpDomain";
 constexpr char kTypeCommand[] = "legion://types/CdpCommand";
 constexpr char kTypeEvent[] = "legion://types/CdpEvent";
 
-Value FromBaseValue(const base::Value& v);
-
-// Lossless base::DictValue -> velite object conversion.
-Value FromBaseDict(const base::DictValue& d) {
-  std::map<std::string, Value> fields;
-  for (const auto [key, field] : d) {
-    fields.emplace(key, FromBaseValue(field));
-  }
-  return Value::make_object(std::move(fields));
-}
-
-// Lossless base::Value -> velite Value conversion for descriptor data
-// (the descriptor is parsed JSON: null/bool/int/double/string/list/dict
-// only, so every kind converts; no silent drops).
-Value FromBaseValue(const base::Value& v) {
-  switch (v.type()) {
-    case base::Value::Type::NONE:
-      return Value();
-    case base::Value::Type::BOOLEAN:
-      return Value(v.GetBool());
-    case base::Value::Type::INTEGER:
-      return Value(v.GetInt());
-    case base::Value::Type::DOUBLE:
-      return Value(v.GetDouble());
-    case base::Value::Type::STRING:
-      return Value(v.GetString());
-    case base::Value::Type::LIST: {
-      std::vector<Value> items;
-      for (const base::Value& item : v.GetList()) {
-        items.push_back(FromBaseValue(item));
-      }
-      return Value::make_array(std::move(items));
-    }
-    case base::Value::Type::DICT:
-      return FromBaseDict(v.GetDict());
-    case base::Value::Type::BINARY:
-      // Unreachable for parsed JSON; refuse loudly rather than narrow.
-      return Value();
-  }
-  return Value();
-}
-
 // The ONE mirror node class (design invariant: data-driven, NO per-domain
 // code). A node's kind + path segments fully determine its answers; every
 // answer is projected from CdpCatalog::Get() at ask time.
@@ -95,7 +55,7 @@ class CdpMirrorNode : public Handle {
   std::string sturdy_identity() const override { return uri(); }
 
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
-                                   const Value& /*spec*/) override {
+                                   const Value& spec) override {
     if (msg == "__getIdentity") {
       return ValueHandle::make(identity_);
     }
@@ -107,6 +67,11 @@ class CdpMirrorNode : public Handle {
     }
     if (msg == "__getSchema") {
       return Schema();
+    }
+    // ACM-2 (HS-1): invoke on a command node dispatches on the BROWSER
+    // target's persistent session — behind the session-context gate.
+    if (msg == "invoke" && kind_ == Kind::kCommand) {
+      return Invoke(spec);
     }
     // Reserved / unwrap probes never fall through to catalog lookup.
     if (!msg.empty() && msg.front() == '_') {
@@ -214,9 +179,29 @@ class CdpMirrorNode : public Handle {
     return ValueHandle::make_broken("unknown-message");
   }
 
+  // ACM-2: invoke through the HS-1 session layer, gated by the
+  // session-context rule (design section 2, NORMATIVE): the browser
+  // session's width is CLOSED — a domain absent from the derived closed
+  // union is the typed refusal NAMING the per-target path, never a raw CDP
+  // "wasn't found" passthrough. In-union commands dispatch; the host's own
+  // answer (result or error) passes through. The rows are ACM-S2's derived
+  // table — nothing here is hand-named.
+  std::shared_ptr<Handle> Invoke(const Value& spec) const {
+    const CdpCatalog& cat = CdpCatalog::Get();
+    std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
+    if (!row.has_value() || !row->in_browser_union) {
+      return ValueHandle::make_broken(
+          "session-context: " + domain_ + "." + member_ +
+          " is not in the browser session's closed union; use targets/<id>/cdp/" +
+          domain_ + "/" + member_);
+    }
+    return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
+        domain_ + "." + member_, spec);
+  }
+
   // Catalog-lookup navigation. Misses answer TYPED reasons; nodes are
-  // minted per ask (stateless projection — session state arrives with
-  // ACM-2 and lives in the session registry, not in these nodes).
+  // minted per ask (stateless projection — per-target session state lives
+  // in the ACM-2 session registry, not in these nodes).
   std::shared_ptr<Handle> Child(const std::string& name) const {
     const CdpCatalog& cat = CdpCatalog::Get();
     switch (kind_) {

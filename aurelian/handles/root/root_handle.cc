@@ -319,9 +319,11 @@ void DestroyChromeRoot(ChromeRoot* root) {
   delete root;
 }
 
-std::string RootDispatch(ChromeRoot* root, const std::string& path) {
+DispatchOutcome RootDispatch(ChromeRoot* root, const std::string& path) {
+  DispatchOutcome out;
   if (!root || !root->handle) {
-    return "broken:no-root";
+    out.reply = "broken:no-root";
+    return out;
   }
   // Walk the path segment by segment from the root. Each non-final segment must
   // resolve to a child handle; the final segment is asked and its reply
@@ -329,16 +331,29 @@ std::string RootDispatch(ChromeRoot* root, const std::string& path) {
   std::vector<std::string> segments = base::SplitString(
       path, "/", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   if (segments.empty()) {
-    return Serialize(root->handle);
+    out.reply = Serialize(root->handle);
+    return out;
   }
   std::shared_ptr<Handle> cur = root->handle;
   for (size_t i = 0; i + 1 < segments.size(); ++i) {
     cur = cur->ask(segments[i], Value());
     if (!cur || cur->state_kind() == StateKind::Broken) {
-      return Serialize(cur);
+      out.reply = Serialize(cur);
+      return out;
     }
   }
-  return Serialize(cur->ask(segments.back(), Value()));
+  std::shared_ptr<Handle> answer = cur->ask(segments.back(), Value());
+  if (answer && answer->state_kind() == StateKind::Pending) {
+    // HS-1 (design section 3): the answer settles in a LATER UI turn — the
+    // HS-1 session layer owns settlement delivery. SerializeWireReply never
+    // sees a Pending handle; the caller owns the wait (the wire bridge waits
+    // on its completion record; an in-process caller pumps its own loop).
+    out.kind = DispatchOutcome::Kind::kPending;
+    out.answer = std::move(answer);
+    return out;
+  }
+  out.reply = Serialize(answer);
+  return out;
 }
 
 }  // namespace aurelian

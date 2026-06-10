@@ -75,7 +75,7 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest,
 
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
-  std::string active = RootDispatch(root, "tabs/activeUrl");
+  std::string active = RootDispatch(root, "tabs/activeUrl").reply;
   EXPECT_NE(active.find("acm-s1-navigated"), std::string::npos)
       << "facade does not observe the CDP-driven navigation: " << active;
   DestroyChromeRoot(root);

@@ -13,6 +13,8 @@
 #include <string>
 
 #include "aurelian/capability/cap_anchor_provisioner.h"
+#include "aurelian/federation/bridge_dispatch.h"
+#include "aurelian/federation/completion_bridge.h"
 #include "aurelian/federation/uds_register.h"
 #include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
@@ -20,16 +22,13 @@
 #include "aurelian/media/aurelian_virtual_mic.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
-#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/synchronization/waitable_event.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "velite/agentspaces-wire/agentspace.hpp"
 
@@ -212,8 +211,10 @@ void BrowserMainExtra::PostCreateThreads() {
   // 3. Create the tabs handle.
   impl_->tabs_handle = CreateTabsHandle();
 
-  // 4. Prove the membrane is erected + its root reachable: walk it for identity.
-  std::string identity_result = RootDispatch(impl_->root, "__getIdentity");
+  // 4. Prove the membrane is erected + its root reachable: walk it for
+  //    identity (a settled answer — Completed by construction).
+  std::string identity_result =
+      RootDispatch(impl_->root, "__getIdentity").reply;
   LOG(WARNING) << "[aurelian] legion://chrome/ install-membrane sealed; "
                << "__getIdentity=" << identity_result;
 
@@ -222,38 +223,20 @@ void BrowserMainExtra::PostCreateThreads() {
   //    opens NO inbound network port; the hub forwards a controller's leaf asks
   //    back as dispatchAt against the sealed root. A missing hub is fail-soft —
   //    the browser still works, just unregistered until the hub is up.
-  //    Forwarded asks arrive on UdsRegister's serve thread, but browser handles
-  //    are UI-thread-affine, so dispatch is refused off the UI thread (returns
-  //    broken) rather than touching a browser object off-thread (a crash); the
-  //    UI-thread hop for forwarded asks is the next slice (C9-forward-threading).
-  //    The register handshake itself invokes no dispatch, so it is fully live.
+  //    Forwarded asks arrive on UdsRegister's serve thread; browser handles
+  //    are UI-thread affine (touching a WebContents off-thread crashes —
+  //    physics, not permission). BridgeDispatch is the HS-1
+  //    completion-signaled hop (ACM-2, design section 3): the record is
+  //    created on the serve thread pre-post, the posted UI task starts the
+  //    dispatch and returns, and the serve thread waits on the record —
+  //    Stop()-coverable, typed timeout, no UI-thread block.
   ChromeRoot* sealed_root = impl_->root;
   impl_->uds_register = std::make_unique<UdsRegister>();
   const std::string sock = ResolveAgrippaSock();
   const bool dialed = impl_->uds_register->Start(
       sock, "chrome", "aurelian-browser",
       [sealed_root](const std::string& path) -> std::string {
-        // Forwarded asks arrive on UdsRegister's serve thread; browser handles
-        // are UI-thread affine (touching a WebContents off-thread crashes —
-        // physics, not permission). Hop to the UI thread, run RootDispatch
-        // there, and return its reply. In production the UI message loop runs
-        // normally so the posted task executes; a test must spin the loop.
-        if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
-          return RootDispatch(sealed_root, path);
-        }
-        std::string result;
-        base::WaitableEvent done;
-        content::GetUIThreadTaskRunner({})->PostTask(
-            FROM_HERE,
-            base::BindOnce(
-                [](ChromeRoot* r, const std::string& p, std::string* out,
-                   base::WaitableEvent* d) {
-                  *out = RootDispatch(r, p);
-                  d->Signal();
-                },
-                sealed_root, path, &result, &done));
-        done.Wait();
-        return result;
+        return BridgeDispatch(sealed_root, path);
       });
   LOG(WARNING) << "[aurelian] machine-hub register "
                << (dialed ? "dialed + registered facet chrome over"
@@ -283,6 +266,11 @@ void BrowserMainExtra::PostBrowserStart() {
 }
 
 void BrowserMainExtra::PostMainMessageLoopRun() {
+  // HS-1 Stop() drain (ACM-2, design section 3): the UI loop has stopped
+  // pumping, so a serve thread blocked on a completion record would never
+  // be signalled by a completion — mark every live record shutdown and
+  // signal BEFORE the teardown below joins the serve threads.
+  CompletionBridge::Get().Stop();
   // Tear down before the browser shuts down.
   impl_.reset();
 }

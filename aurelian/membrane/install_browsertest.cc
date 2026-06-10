@@ -48,26 +48,26 @@ IN_PROC_BROWSER_TEST_F(AurelianInstallMembraneBrowserTest, SealsAmbientSurface) 
   ASSERT_NE(root, nullptr);
 
   // The granted capability is reachable through the membrane (real value).
-  EXPECT_TRUE(Contains(RootDispatch(root, "system/info"), "browserPid"))
-      << RootDispatch(root, "system/info");
+  EXPECT_TRUE(Contains(RootDispatch(root, "system/info").reply, "browserPid"))
+      << RootDispatch(root, "system/info").reply;
 
   // (a) Capabilities outside the policy are unreachable — broken('out-of-scope'),
   //     not a live tab strip / GPU surface.
-  EXPECT_TRUE(Contains(RootDispatch(root, "tabs/count"), "out-of-scope"))
-      << RootDispatch(root, "tabs/count");
-  EXPECT_TRUE(Contains(RootDispatch(root, "gpu/info"), "out-of-scope"))
-      << RootDispatch(root, "gpu/info");
+  EXPECT_TRUE(Contains(RootDispatch(root, "tabs/count").reply, "out-of-scope"))
+      << RootDispatch(root, "tabs/count").reply;
+  EXPECT_TRUE(Contains(RootDispatch(root, "gpu/info").reply, "out-of-scope"))
+      << RootDispatch(root, "gpu/info").reply;
   // A capability the membrane does not mount at all is likewise out of scope.
-  EXPECT_TRUE(Contains(RootDispatch(root, "net"), "out-of-scope"))
-      << RootDispatch(root, "net");
+  EXPECT_TRUE(Contains(RootDispatch(root, "net").reply, "out-of-scope"))
+      << RootDispatch(root, "net").reply;
 
   // (b) The wrapped Handle exposes no unwrap to its raw ambient reference.
-  EXPECT_TRUE(Contains(RootDispatch(root, "system/__ambient"), "unknown-message"))
-      << RootDispatch(root, "system/__ambient");
+  EXPECT_TRUE(Contains(RootDispatch(root, "system/__ambient").reply, "unknown-message"))
+      << RootDispatch(root, "system/__ambient").reply;
 
   // (c) The root yields no ambient authority directly.
-  EXPECT_TRUE(Contains(RootDispatch(root, "__ambient"), "unknown-message"))
-      << RootDispatch(root, "__ambient");
+  EXPECT_TRUE(Contains(RootDispatch(root, "__ambient").reply, "unknown-message"))
+      << RootDispatch(root, "__ambient").reply;
 
   // [EMBODIMENT-ONE-SHOT-CONSUMPTION] — a second install on the SAME space is
   // refused (per-AgentSpace one-shot); the membrane is not re-opened.

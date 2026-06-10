@@ -8,12 +8,10 @@
 #include <cstdint>
 #include <thread>
 
+#include "aurelian/federation/bridge_dispatch.h"
 #include "aurelian/handles/root/root_handle.h"
-#include "base/functional/bind.h"
-#include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
-#include "content/public/browser/browser_thread.h"
 #include "velite/channel.hpp"
 #include "velite/string_view.hpp"
 #include "velite/ws_channel.hpp"
@@ -32,32 +30,17 @@ void SleepBriefly() {
 }  // namespace
 
 std::string DispatchChromeRoot(const std::string& request) {
-  // The federation entry point reaches the same navigable root the bootstrap
-  // mounts — one model, served to remote peers. `request` is a slash-path
-  // (e.g. "__getIdentity" or "system/info").
+  // The federation entry point reaches a navigable root. `request` is a
+  // slash-path (e.g. "__getIdentity" or "system/info"). KNOWN DEBT, on-plan:
+  // this lazy static is a SECOND un-sealed root, disconnected from the
+  // install membrane — ACM-2w deletes it and re-points this scaffold at the
+  // ONE ChromeDispatchFn exported over the installed root (design section 5
+  // round-3/4/5 contract; the ACM-2w counted-construction RED pins it).
   static ChromeRoot* root = CreateChromeRoot();
-  // The root's leaf handles touch UI-thread-affine browser state (system/info
-  // reads GetSystemInfo(), tabs reads BrowserList, …). The WSS serve thread is
-  // NOT the UI thread, so dispatching a real leaf there DCHECKs/crashes — hop to
-  // the UI thread for the dispatch (mirrors the C9 boot forward). In production
-  // the UI loop runs so the posted task executes; a test must keep the UI thread
-  // free (run the blocking client off it + spin the loop).
-  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
-    return RootDispatch(root, request);
-  }
-  std::string result;
-  base::WaitableEvent done;
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](ChromeRoot* r, const std::string& req, std::string* out,
-             base::WaitableEvent* d) {
-            *out = RootDispatch(r, req);
-            d->Signal();
-          },
-          root, request, &result, &done));
-  done.Wait();
-  return result;
+  // The WSS serve thread is NOT the UI thread; BridgeDispatch is the HS-1
+  // completion-signaled hop (ACM-2, design section 3) — same glue as the
+  // production UDS bring-up.
+  return BridgeDispatch(root, request);
 }
 
 // ---------------------------------------------------------------------------
@@ -71,10 +54,14 @@ struct WssPeer::Impl {
   DispatchFn dispatch;
 
   void Serve() {
-    velite::WebSocketChannel conn;
+    // HEAP-allocated: the velite WS channel embeds its MTU-sized rx buffer
+    // inline (WS_CHANNEL_RX_BUFFER_BYTES is 1 MiB + 4 KiB since the
+    // upstream frame-reassembly fix, Legion 63230cc169) — as a stack local
+    // it overflows this std::thread's 512 KiB stack at function entry.
+    auto conn = std::make_unique<velite::WebSocketChannel>();
     // Accept one peer (non-blocking accept; poll until a peer arrives).
     while (!stop.load()) {
-      if (listener.accept(conn, velite::StringView("wss-peer"))) {
+      if (listener.accept(*conn, velite::StringView("wss-peer"))) {
         break;
       }
       SleepBriefly();
@@ -83,22 +70,22 @@ struct WssPeer::Impl {
       return;
     }
     // Serve request/reply frames until the peer closes.
-    uint8_t buf[kRxBuffer];
-    while (!stop.load() && conn.is_open()) {
+    auto buf = std::make_unique<uint8_t[]>(kRxBuffer);
+    while (!stop.load() && conn->is_open()) {
       size_t len = 0;
-      velite::ChannelError err = conn.recv(buf, sizeof(buf), &len);
+      velite::ChannelError err = conn->recv(buf.get(), kRxBuffer, &len);
       if (err == velite::ChannelError::OK && len > 0) {
-        std::string request(reinterpret_cast<char*>(buf), len);
+        std::string request(reinterpret_cast<char*>(buf.get()), len);
         std::string reply = dispatch ? dispatch(request) : std::string();
-        conn.send(reinterpret_cast<const uint8_t*>(reply.data()),
-                  reply.size());
+        conn->send(reinterpret_cast<const uint8_t*>(reply.data()),
+                   reply.size());
       } else if (err == velite::ChannelError::Closed) {
         break;
       } else {
         SleepBriefly();
       }
     }
-    conn.close();
+    conn->close();
   }
 };
 

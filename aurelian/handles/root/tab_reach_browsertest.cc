@@ -28,31 +28,31 @@ IN_PROC_BROWSER_TEST_F(AurelianTabReachBrowserTest, ControllerDrivesLiveTabStrip
   ChromeRoot* root = CreateChromeRoot();
 
   // The browser starts with exactly one tab.
-  EXPECT_EQ(RootDispatch(root, "tabs/count"), "1");
+  EXPECT_EQ(RootDispatch(root, "tabs/count").reply, "1");
 
   // Open a second tab THROUGH the mounted interactive verb. OpenTab foregrounds
   // it, so the new tab (index 1) becomes active and its index is returned.
-  EXPECT_EQ(RootDispatch(root, "tabs/open"), "1")
+  EXPECT_EQ(RootDispatch(root, "tabs/open").reply, "1")
       << "tabs/open is unreachable — the interactive tab handle is not mounted";
-  EXPECT_EQ(RootDispatch(root, "tabs/count"), "2");
-  EXPECT_EQ(RootDispatch(root, "tabs/activeIndex"), "1");
+  EXPECT_EQ(RootDispatch(root, "tabs/count").reply, "2");
+  EXPECT_EQ(RootDispatch(root, "tabs/activeIndex").reply, "1");
 
   // `activate` genuinely moves the active tab on the LIVE strip — both ways.
-  EXPECT_EQ(RootDispatch(root, "tabs/0/activate"), "ok");
-  EXPECT_EQ(RootDispatch(root, "tabs/activeIndex"), "0");
-  EXPECT_EQ(RootDispatch(root, "tabs/1/activate"), "ok");
-  EXPECT_EQ(RootDispatch(root, "tabs/activeIndex"), "1");
+  EXPECT_EQ(RootDispatch(root, "tabs/0/activate").reply, "ok");
+  EXPECT_EQ(RootDispatch(root, "tabs/activeIndex").reply, "0");
+  EXPECT_EQ(RootDispatch(root, "tabs/1/activate").reply, "ok");
+  EXPECT_EQ(RootDispatch(root, "tabs/activeIndex").reply, "1");
 
   // The per-tab handle reads real committed state: navigate the active tab
   // (tab 1) to a data: URL and read it back through `tabs/1/url`.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL("data:text/html,<title>reach</title>tab-reach")));
-  EXPECT_EQ(RootDispatch(root, "tabs/1/url"),
+  EXPECT_EQ(RootDispatch(root, "tabs/1/url").reply,
             "data:text/html,<title>reach</title>tab-reach");
 
   // `close` shrinks the live strip.
-  EXPECT_EQ(RootDispatch(root, "tabs/1/close"), "ok");
-  EXPECT_EQ(RootDispatch(root, "tabs/count"), "1");
+  EXPECT_EQ(RootDispatch(root, "tabs/1/close").reply, "ok");
+  EXPECT_EQ(RootDispatch(root, "tabs/count").reply, "1");
 
   DestroyChromeRoot(root);
 }

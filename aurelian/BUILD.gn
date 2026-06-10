@@ -170,6 +170,84 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
+  # ACM-2 (HS-1) grep-assert: no base::RunLoop in the new async layer —
+  # build-time, so the invariant cannot rot silently (design section 3).
+  action("aurelian_hs1_no_runloop_audit") {
+    script = "mirror/no_runloop_audit.py"
+    _audited = [
+      "mirror/cdp_agent_client.cc",
+      "mirror/cdp_agent_client.h",
+      "mirror/cdp_session.cc",
+      "mirror/cdp_session.h",
+      "mirror/value_convert.cc",
+      "mirror/value_convert.h",
+      "federation/completion_bridge.cc",
+      "federation/completion_bridge.h",
+      "federation/bridge_dispatch.cc",
+      "federation/bridge_dispatch.h",
+    ]
+    inputs = _audited
+    outputs = [ "$target_gen_dir/hs1_no_runloop_audit.stamp" ]
+    args = [
+             "--stamp",
+             rebase_path("$target_gen_dir/hs1_no_runloop_audit.stamp",
+                         root_build_dir),
+           ] + rebase_path(_audited, root_build_dir)
+  }
+
+  # ACM-2 (HS-1): the content-layer half of the persistent session — the
+  # long-lived DevToolsAgentHostClient behind a plain API. SEPARATE no-RTTI
+  # source_set for the same reason as find_glue: the content base's typeinfo
+  # is not emitted in the no-RTTI build, so the RTTI session TU cannot
+  # subclass it directly.
+  source_set("aurelian_cdp_agent_client") {
+    sources = [
+      "mirror/cdp_agent_client.cc",
+      "mirror/cdp_agent_client.h",
+    ]
+
+    deps = [
+      "//base",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # ACM-2 (HS-1): the async CDP session layer — persistent per-target
+  # client, monotonic ids, request/reply correlation, settlement via
+  # pending-Handle resolution on the UI thread (design section 3). RTTI
+  # (Velite handles).
+  source_set("aurelian_cdp_session") {
+    sources = [
+      "mirror/cdp_session.cc",
+      "mirror/cdp_session.h",
+      "mirror/value_convert.cc",
+      "mirror/value_convert.h",
+    ]
+
+    deps = [
+      ":aurelian_cdp_agent_client",
+      ":aurelian_completion_bridge",
+      ":aurelian_hs1_no_runloop_audit",
+      "//base",
+      "//content/public/browser",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # ACM-1: the CDP catalog mirror — ONE data-driven node class projecting
   # the embedded descriptor (no per-domain code). RTTI (Velite handles).
   source_set("aurelian_cdp_mirror") {
@@ -180,6 +258,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_catalog",
+      ":aurelian_cdp_session",
       "//base",
       "//velite",
     ]
@@ -648,6 +727,53 @@ if (enable_aurelian) {
     ]
   }
 
+  # ACM-2 (HS-1): the completion-signaled bridge MECHANISM (design section
+  # 3) — completion record + mutex-protected live set + UI-confined
+  # settlement registrar + Stop() drain. ChromeRoot-free and content-free
+  # so the timeout/CAS/drain pins run at unit tier. RTTI (Velite handles).
+  source_set("aurelian_completion_bridge") {
+    sources = [
+      "federation/completion_bridge.cc",
+      "federation/completion_bridge.h",
+    ]
+
+    deps = [
+      ":aurelian_wire_serialize",
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
+  # ACM-2 (HS-1): the ONE serve-thread blocking dispatch glue both wire
+  # bridge sites consume (the UDS register-in lambda + the WSS scaffold).
+  source_set("aurelian_bridge_dispatch") {
+    sources = [
+      "federation/bridge_dispatch.cc",
+      "federation/bridge_dispatch.h",
+    ]
+
+    deps = [
+      ":aurelian_completion_bridge",
+      ":aurelian_root",
+      "//base",
+      "//content/public/browser",
+    ]
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   source_set("aurelian_federation") {
     sources = [
       "federation/wss_peer.cc",
@@ -655,6 +781,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_bridge_dispatch",
       ":aurelian_root",
       "//base",
       "//content/public/browser",
@@ -928,7 +1055,9 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_bridge_dispatch",
       ":aurelian_cap_anchor_provisioner",
+      ":aurelian_completion_bridge",
       ":aurelian_embodiment_policy",
       ":aurelian_handles",
       ":aurelian_install",
@@ -957,6 +1086,7 @@ if (enable_aurelian) {
       "capability/cap_chain_unittest.cc",
       "capability/cap_membrane_unittest.cc",
       "capability/cap_predicate_unittest.cc",
+      "federation/completion_bridge_unittest.cc",
       "federation/uds_register_unittest.cc",
       "handles/media/media_seam_unittest.cc",
       "media/aurelian_virtual_mic_unittest.cc",
@@ -967,6 +1097,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_capability",
+      ":aurelian_completion_bridge",
       ":aurelian_credentials",
       ":aurelian_media",
       ":aurelian_streams",
@@ -1107,6 +1238,7 @@ if (enable_aurelian) {
       "handles/root/tab_reach_browsertest.cc",
       "membrane/install_browsertest.cc",
       "mirror/cdp_mirror_browsertest.cc",
+      "mirror/cdp_session_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
@@ -1129,8 +1261,11 @@ if (enable_aurelian) {
       ":aurelian_cap_browser",
       ":aurelian_catalog",
       ":aurelian_cdp_mirror",
+      ":aurelian_cdp_session",
       ":aurelian_clipboard",
       ":aurelian_capability",
+      ":aurelian_completion_bridge",
+      ":aurelian_wire_serialize",
       ":aurelian_devtools",
       ":aurelian_dialogs",
       ":aurelian_emulation",
