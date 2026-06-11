@@ -147,7 +147,7 @@ ConformanceServe::~ConformanceServe() {
 }
 
 bool ConformanceServe::Start(const std::string& socket_path,
-                             ChromeDispatchFn dispatch,
+                             BeginChromeDispatchFn dispatch,
                              const std::vector<uint8_t>& cap_anchor,
                              base::OnceClosure on_disconnect,
                              ChromeWireSubscribeFn wire_subscribe) {

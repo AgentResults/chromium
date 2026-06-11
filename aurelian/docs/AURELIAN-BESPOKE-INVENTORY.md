@@ -3,7 +3,9 @@
 The authored inventory `AURELIAN-GENERIC-CONTROL-DESIGN.md` section 7 demands:
 every `.cc`/`.h` file under `aurelian/handles/**` (recursive), the federation
 bring-up set (`federation/uds_register*`, `federation/wss_peer*`,
-`federation/nav_handle_internal*`), `capability/cap_gated_cookies*`, the
+`federation/nav_handle_internal*`, `federation/pending_dispatch*`,
+`federation/serve_pump*`, `federation/wire_event*`),
+`capability/cap_gated_cookies*`, the
 renderer Mojo bridge (`renderer/**`), the virtual-A/V layer (`media/**`) and
 the conformance layer (`conformance/**`, CF-1) carries exactly ONE
 disposition row.
@@ -68,6 +70,9 @@ neither mirrored nor part of the contract surface).
 | federation/nav_handle_internal.h | KEEP-infrastructure | CF-1/CF-4: the ONE NavHandle factory seam + the unified slot-0 wrapper factory (MakeUnifiedSlotZero) — velite-typed, internal; implementations stay in uds_register.cc, no parallel handle |
 | federation/serve_pump.h | KEEP-infrastructure | CF-4 (design §4.1, closing the CF-1 deviation): ONE serve loop, two callers — drain→dispatch→pump→idle parameterised by the transport drain; never pumps after a session-scoped CLOSE; CF-5 adds the optional flush hook (the wire-event mailbox drain) |
 | federation/wire_event_mailbox.cc federation/wire_event_mailbox.h | KEEP-infrastructure | CF-5 (design §5.2): the ONE new wire-eventing mechanism — the mutex-guarded {sub_id,msg,event} mailbox (move-under-the-lock ownership handoff; per-subscription cap, typed SubscriptionOverflow termination) + the producer-constructed WireSinkHandle (SubSinkHandle's shape, enqueue instead of inline emit_tell) |
+| federation/pending_dispatch.cc federation/pending_dispatch.h | KEEP-infrastructure | CF-6 (design §6.1, F8b): the deferred-dispatch Handle over the UNCHANGED HS-1 CompletionRecord — kPending→Pending, kCompleted→ResolvedValue, kShutdown/deadline→typed Broken; the blocking bridge_dispatch glue DELETED with it (§6.2 DELETE-default: no production consumer remained; the Wait primitive stays in completion_bridge for Stop-coverage + unit pins) |
+| federation/pending_dispatch_unittest.cc | KEEP-test-harness | CF-6 unit RED: record-state mapping + deadline-breaks-typed |
+| federation/pending_dispatch_browsertest.cc | KEEP-test-harness | CF-6 RED: SecondAskSettlesWhileFirstInFlight — the one-in-flight lift pinned at wire-frame order |
 | federation/wire_event_browsertest.cc | KEEP-test-harness | CF-5 RED/pin: CdpEventCrossesWireAsSubscriptionEventTell (the event-crosses-the-wire RED) + MailboxOverflowTerminatesTyped (the typed-bound pin, zero-cap deterministic) |
 | conformance/unified_bootstrap.cc conformance/unified_bootstrap.h | KEEP-infrastructure | CF-4 (design §4.1): the ONE unified slot-0 bootstrap construction (seeded identity + chrome mount pre-seal + claims cap) — both bring-up modes build here, never two constructions that could drift |
 | conformance/facet_claims.cc conformance/facet_claims.h | KEEP-infrastructure | CF-1 (design §3.2): the computed claims set — ONE source feeding the emitted __handshake manifest AND the bootstrap's claims cap, build-conditioned by the same guards as the surface |

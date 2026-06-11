@@ -110,8 +110,8 @@ if (enable_aurelian) {
       "mirror/value_convert.h",
       "federation/completion_bridge.cc",
       "federation/completion_bridge.h",
-      "federation/bridge_dispatch.cc",
-      "federation/bridge_dispatch.h",
+      "federation/pending_dispatch.cc",
+      "federation/pending_dispatch.h",
     ]
     inputs = _audited
     outputs = [ "$target_gen_dir/hs1_no_runloop_audit.stamp" ]
@@ -445,6 +445,9 @@ if (enable_aurelian) {
       ":aurelian_unified_bootstrap",
       # CF-5: the wire-event mailbox the serve loop drains.
       ":aurelian_wire_event",
+      # CF-6: the deferred-dispatch handle + the completion record.
+      ":aurelian_completion_bridge",
+      ":aurelian_pending_dispatch",
       "//base",
       "//velite",
     ]
@@ -483,25 +486,29 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
-  # ACM-2 (HS-1): the ONE serve-thread blocking dispatch glue both wire
-  # bridge sites consume (the UDS register-in lambda + the WSS scaffold).
-  source_set("aurelian_bridge_dispatch") {
+  # CF-6 (F8b): the deferred-dispatch Handle over the UNCHANGED HS-1
+  # CompletionRecord — the blocking bridge_dispatch glue is DELETED
+  # (design §6.2: no production consumer remained). RTTI (Velite Handle).
+  source_set("aurelian_pending_dispatch") {
     sources = [
-      "federation/bridge_dispatch.cc",
-      "federation/bridge_dispatch.h",
+      "federation/pending_dispatch.cc",
+      "federation/pending_dispatch.h",
     ]
 
     deps = [
       ":aurelian_completion_bridge",
-      ":aurelian_root",
       "//base",
-      "//content/public/browser",
+      "//velite",
     ]
 
+    include_dirs = _velite_include_dirs
+
     configs -= [
+      "//build/config/compiler:no_rtti",
       "//build/config/clang:find_bad_constructs",
       "//build/config/clang:unsafe_buffers",
     ]
+    configs += [ "//build/config/compiler:rtti" ]
   }
 
   # AU-CAP-LIVE: provisions the operator cap trust anchor onto each renderer
@@ -701,7 +708,6 @@ if (enable_aurelian) {
     ]
 
     deps = [
-      ":aurelian_bridge_dispatch",
       ":aurelian_cap_anchor_provisioner",
       ":aurelian_cdp_session",
       ":aurelian_completion_bridge",
@@ -807,6 +813,7 @@ if (enable_aurelian) {
       "capability/cap_predicate_unittest.cc",
       "federation/completion_bridge_unittest.cc",
       "federation/conformance_bootstrap_link_unittest.cc",
+      "federation/pending_dispatch_unittest.cc",
       "federation/uds_register_unittest.cc",
       "handles/media/media_seam_unittest.cc",
       "media/aurelian_virtual_mic_unittest.cc",
@@ -1070,6 +1077,7 @@ if (enable_aurelian) {
       "catalog/session_context_browsertest.cc",
       "conformance/conformance_serve_browsertest.cc",
       "federation/one_root_browsertest.cc",
+      "federation/pending_dispatch_browsertest.cc",
       "federation/wire_event_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",

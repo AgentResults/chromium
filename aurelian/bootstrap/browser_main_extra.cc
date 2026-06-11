@@ -14,7 +14,6 @@
 
 #include "aurelian/capability/cap_anchor_provisioner.h"
 #include "aurelian/conformance/conformance_serve.h"
-#include "aurelian/federation/bridge_dispatch.h"
 #include "aurelian/federation/completion_bridge.h"
 #include "aurelian/federation/uds_register.h"
 #include "aurelian/federation/wire_event_mailbox.h"
@@ -151,12 +150,21 @@ ChromeRoot* g_installed_root = nullptr;
 ChromeWireSubscribeFn InstalledWireSubscribe() {
   static const base::NoDestructor<ChromeWireSubscribeFn> subscribe(
       [](const std::string& uri, const std::string& sub_id,
-         WireEventMailbox* mailbox) -> std::string {
+         WireEventMailbox* mailbox) -> std::shared_ptr<CompletionRecord> {
+        // CF-6: a malformed event URI answers an ALREADY-COMPLETED record
+        // (the refusal never reaches the UI thread, design §6.1).
+        auto refused = [](const std::string& reason) {
+          auto r = std::make_shared<CompletionRecord>();
+          r->reply = reason;
+          r->outcome.store(CompletionRecord::kCompleted);
+          r->event.Signal();
+          return r;
+        };
         // Parse: legion://chrome/cdp/<Domain>/events/<event>  (browser) or
         //        legion://chrome/targets/<id>/cdp/<D>/events/<e> (target).
         constexpr char kPrefix[] = "legion://chrome/";
         if (uri.rfind(kPrefix, 0) != 0) {
-          return "broken:event-uri-malformed:" + uri;
+          return refused("broken:event-uri-malformed:" + uri);
         }
         std::string rel = uri.substr(sizeof(kPrefix) - 1);
         std::string target_id;
@@ -164,25 +172,25 @@ ChromeWireSubscribeFn InstalledWireSubscribe() {
           rel = rel.substr(8);
           const size_t slash = rel.find('/');
           if (slash == std::string::npos) {
-            return "broken:event-uri-malformed:" + uri;
+            return refused("broken:event-uri-malformed:" + uri);
           }
           target_id = rel.substr(0, slash);
           rel = rel.substr(slash + 1);
         }
         // rel must now be cdp/<Domain>/events/<event>.
         if (rel.rfind("cdp/", 0) != 0) {
-          return "broken:event-uri-malformed:" + uri;
+          return refused("broken:event-uri-malformed:" + uri);
         }
         rel = rel.substr(4);
         const size_t d_slash = rel.find('/');
         if (d_slash == std::string::npos ||
             rel.compare(d_slash + 1, 7, "events/") != 0) {
-          return "broken:event-uri-malformed:" + uri;
+          return refused("broken:event-uri-malformed:" + uri);
         }
         const std::string domain = rel.substr(0, d_slash);
         const std::string event = rel.substr(d_slash + 1 + 7);
         if (domain.empty() || event.empty()) {
-          return "broken:event-uri-malformed:" + uri;
+          return refused("broken:event-uri-malformed:" + uri);
         }
         const std::string event_method = domain + "." + event;
 
@@ -217,25 +225,56 @@ ChromeWireSubscribeFn InstalledWireSubscribe() {
                                                    "subscribed:" + sub_id);
                 },
                 uri, sub_id, mailbox, target_id, event_method, record));
-        return CompletionBridge::Get().Wait(record, base::Seconds(10));
+        // CF-6: NON-blocking — the wrapper wraps this record in a
+        // PendingDispatchHandle; the ack settles through the pump.
+        return record;
       });
   return *subscribe;
 }
 
-// HS-3/ACM-2w (design section 5): the ONE ChromeDispatchFn over the
-// INSTALLED root, constructed once — both wire bring-ups consume it; the
-// WSS scaffold's lazy second root is deleted.
-ChromeDispatchFn InstalledChromeDispatch() {
-  static const base::NoDestructor<ChromeDispatchFn> dispatch(
+// CF-6 (design §6.1) — F8b: the ONE exported dispatch root, BEGIN-form:
+// record-creating, non-blocking. Created on the calling (serve) thread
+// pre-post (every record Stop()-flippable — nothing waits anymore); the
+// posted UI task runs the dispatch and Completes/RegisterPendings; the
+// dispatcher's deferred-pending pump settles the wire answer. Replaces the
+// blocking InstalledChromeDispatch/BridgeDispatch wire path (§6.2 — the
+// blocking wrappers had no other production consumer and are DELETED;
+// the Wait primitive itself stays in CompletionBridge for Stop-coverage
+// and unit pins). HS-3/ACM-2w: still the ONE fn over the INSTALLED root.
+BeginChromeDispatchFn InstalledBeginChromeDispatch() {
+  static const base::NoDestructor<BeginChromeDispatchFn> begin(
       [](const std::string& path,
-         const std::string& serialized_spec) -> std::string {
-        ChromeRoot* root = g_installed_root;
-        if (!root) {
-          return "broken:no-root";
-        }
-        return BridgeDispatch(root, path, serialized_spec);
+         const std::string& serialized_spec)
+          -> std::shared_ptr<CompletionRecord> {
+        std::shared_ptr<CompletionRecord> record =
+            CompletionBridge::Get().CreateRecord();
+        content::GetUIThreadTaskRunner({})->PostTask(
+            FROM_HERE,
+            base::BindOnce(
+                [](const std::string& path, const std::string& spec,
+                   std::shared_ptr<CompletionRecord> record) {
+                  ChromeRoot* root = g_installed_root;
+                  if (!root) {
+                    // Fail-closed outside the install window.
+                    CompletionBridge::Get().Complete(std::move(record),
+                                                     "broken:no-root");
+                    return;
+                  }
+                  DispatchOutcome outcome =
+                      RootDispatch(root, path, spec);
+                  if (outcome.kind == DispatchOutcome::Kind::kPending) {
+                    CompletionBridge::Get().RegisterPending(
+                        std::move(record), std::move(outcome.answer));
+                    return;
+                  }
+                  CompletionBridge::Get().Complete(std::move(record),
+                                                   std::move(outcome.reply));
+                },
+                path, serialized_spec, record));  // copy: the record is
+                                                  // ALSO the return value
+        return record;
       });
-  return *dispatch;
+  return *begin;
 }
 
 // ---------------------------------------------------------------------------
@@ -414,7 +453,7 @@ void BrowserMainExtra::PostCreateThreads() {
     const std::string serve_sock =
         command_line->GetSwitchValueASCII(kConformanceServeSwitch);
     const bool served = impl_->conformance_serve->Start(
-        serve_sock, InstalledChromeDispatch(), impl_->cap_anchor,
+        serve_sock, InstalledBeginChromeDispatch(), impl_->cap_anchor,
         // Launcher lane: the connection IS the browser lifetime (design
         // §2.3-07). CloseBrowserSoon is the canonical programmatic-close
         // entry (the CDP Browser.close path): it releases the DevTools
@@ -438,7 +477,7 @@ void BrowserMainExtra::PostCreateThreads() {
   // CF-4: the register-in presents the browser's REAL persisted identity
   // (the seed → seeded Ed25519 destHash), replacing the old literal.
   const bool dialed = impl_->uds_register->Start(
-      sock, "chrome", ResolveAurelianPeerSeed(), InstalledChromeDispatch(),
+      sock, "chrome", ResolveAurelianPeerSeed(), InstalledBeginChromeDispatch(),
       impl_->cap_anchor,
       // CF-5: the wire-subscribe seam (chrome event nodes → the mirror).
       InstalledWireSubscribe());

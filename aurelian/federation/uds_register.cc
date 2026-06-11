@@ -7,6 +7,7 @@
 #include "aurelian/conformance/facet_claims.h"
 #include "aurelian/conformance/unified_bootstrap.h"
 #include "aurelian/federation/nav_handle_internal.h"
+#include "aurelian/federation/pending_dispatch.h"
 #include "aurelian/federation/serve_pump.h"
 #include "aurelian/federation/wire_event_mailbox.h"
 
@@ -75,6 +76,11 @@ class NavRef : public Handle {
 // serve-thread stack buffer would repeat the wss_peer 63230cc169 overflow.
 constexpr size_t kRxBuffer = velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES;
 constexpr char kChromeUriPrefix[] = "legion://chrome";
+
+// CF-6: the wire dispatch deadline (was the blocking bridge's wait budget).
+// A never-settling chrome dispatch answers the typed timeout via the
+// pending handle's state_kind() — no timer thread, no serve-thread block.
+constexpr base::TimeDelta kWireDispatchDeadline = base::Seconds(15);
 
 // HS-3 (ACM-2w, design section 5 round-5 review M5): the spec crosses the
 // dispatch seam SERIALIZED and VALUE-ONLY. A re-parsed serialized spec
@@ -169,7 +175,7 @@ std::string CanonicalGateUri(const std::string& uri) {
 class NavHandle : public Handle {
  public:
   static std::shared_ptr<NavHandle> make(std::string uri,
-                                         ChromeDispatchFn dispatch) {
+                                         BeginChromeDispatchFn dispatch) {
     return std::shared_ptr<NavHandle>(
         new NavHandle(std::move(uri), std::move(dispatch)));
   }
@@ -194,26 +200,36 @@ class NavHandle : public Handle {
       return ValueHandle::make(self_);
     }
     // Any other message is a leaf verb against THIS node's uri; the
-    // caller's spec rides along, serialized + value-only (HS-3).
+    // caller's spec rides along, serialized + value-only (HS-3 — the typed
+    // refusal runs HERE, synchronously on the serve thread, before the
+    // begin-form is reached; design §6.1). CF-6: the dispatch DEFERS — the
+    // begin-form creates the record pre-post and the returned
+    // PendingDispatchHandle settles through the dispatcher pump (F8b).
     std::string spec_json;
     if (!SerializeValueOnlySpec(spec, &spec_json)) {
       return ValueHandle::make_broken(kSlotRefInSpec);
     }
-    std::string reply =
-        dispatch_ ? dispatch_(DerivePath(uri_, std::string(msg)), spec_json)
-                  : std::string("broken:no-dispatch");
-    return ValueHandle::make(Value(std::move(reply)));
+    if (!dispatch_) {
+      return ValueHandle::make_broken("broken:no-dispatch");
+    }
+    std::shared_ptr<CompletionRecord> record =
+        dispatch_(DerivePath(uri_, std::string(msg)), spec_json);
+    if (!record) {
+      return ValueHandle::make_broken("broken:no-dispatch");
+    }
+    return PendingDispatchHandle::make(
+        std::move(record), base::TimeTicks::Now() + kWireDispatchDeadline);
   }
   void tell(std::string_view, const Value&) override {}
 
  private:
-  NavHandle(std::string uri, ChromeDispatchFn dispatch)
+  NavHandle(std::string uri, BeginChromeDispatchFn dispatch)
       : uri_(std::move(uri)),
         dispatch_(std::move(dispatch)),
         self_(uri_) {}
 
   std::string uri_;
-  ChromeDispatchFn dispatch_;
+  BeginChromeDispatchFn dispatch_;
   Value self_;
 };
 
@@ -240,7 +256,7 @@ class AurelianSlotZero : public Handle {
  public:
   static std::shared_ptr<AurelianSlotZero> make(
       std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
-      ChromeDispatchFn dispatch,
+      BeginChromeDispatchFn dispatch,
       const std::vector<uint8_t>& cap_anchor,
       ChromeWireSubscribeFn wire_subscribe = {},
       WireEventMailbox* mailbox = nullptr) {
@@ -292,21 +308,26 @@ class AurelianSlotZero : public Handle {
       }
       // The FOLD body — the same seam a mounted-root leaf ask runs
       // (NavHandle::ask_impl's leaf path verbatim): HS-3 value-only
-      // serialization (slot-ref specs refused typed) + the ONE dispatch
-      // fn over DerivePath. EVERY verb dispatches — __getIdentity
-      // included — preserving the keystone wire shape byte-for-byte
-      // ("legion://chrome/" comes from the sealed root, never from a
-      // navigation-layer intercept).
+      // serialization (slot-ref specs refused typed, synchronously on the
+      // serve thread) + the ONE begin-form over DerivePath. EVERY verb
+      // dispatches — __getIdentity included — preserving the keystone wire
+      // shape ("legion://chrome/" comes from the sealed root, never from a
+      // navigation-layer intercept). CF-6: the dispatch DEFERS (F8b).
       const Value* sv = spec.object_get("spec");
       std::string spec_json;
       if (sv && !SerializeValueOnlySpec(*sv, &spec_json)) {
         return ValueHandle::make_broken(kSlotRefInSpec);
       }
-      std::string reply =
-          dispatch_ ? dispatch_(DerivePath(uv->as_string(), vv->as_string()),
-                                spec_json)
-                    : std::string("broken:no-dispatch");
-      return ValueHandle::make(Value(std::move(reply)));
+      if (!dispatch_) {
+        return ValueHandle::make_broken("broken:no-dispatch");
+      }
+      std::shared_ptr<CompletionRecord> record =
+          dispatch_(DerivePath(uv->as_string(), vv->as_string()), spec_json);
+      if (!record) {
+        return ValueHandle::make_broken("broken:no-dispatch");
+      }
+      return PendingDispatchHandle::make(
+          std::move(record), base::TimeTicks::Now() + kWireDispatchDeadline);
     }
     if (msg == "legion-subscribe-remote") {
       // CF-5 (design §5.2/§5.4): a chrome event-node URI routes through the
@@ -326,12 +347,17 @@ class AurelianSlotZero : public Handle {
         if (!wire_subscribe_ || !mailbox_) {
           return ValueHandle::make_broken("wire-eventing-unavailable");
         }
-        std::string reply =
+        // CF-6: subscribe is just an ask — its ack rides the SAME deferred
+        // pending path as every chrome dispatch (no special-casing in the
+        // end state, design §5.2).
+        std::shared_ptr<CompletionRecord> record =
             wire_subscribe_(uv->as_string(), sid->as_string(), mailbox_);
-        if (reply.rfind("broken:", 0) == 0) {
-          return ValueHandle::make_broken(reply);
+        if (!record) {
+          return ValueHandle::make_broken("wire-eventing-unavailable");
         }
-        return ValueHandle::make(Value(std::move(reply)));
+        return PendingDispatchHandle::make(
+            std::move(record),
+            base::TimeTicks::Now() + kWireDispatchDeadline);
       }
       return vendored_->ask(msg, spec);
     }
@@ -363,7 +389,7 @@ class AurelianSlotZero : public Handle {
  private:
   AurelianSlotZero(
       std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
-      ChromeDispatchFn dispatch,
+      BeginChromeDispatchFn dispatch,
       const std::vector<uint8_t>& cap_anchor,
       ChromeWireSubscribeFn wire_subscribe,
       WireEventMailbox* mailbox)
@@ -378,7 +404,7 @@ class AurelianSlotZero : public Handle {
   }
 
   std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored_;
-  ChromeDispatchFn dispatch_;
+  BeginChromeDispatchFn dispatch_;
   ChromeWireSubscribeFn wire_subscribe_;
   WireEventMailbox* mailbox_ = nullptr;
   // ACM-8: the operator cap trust anchor (the SAME anchor the renderer
@@ -392,7 +418,7 @@ class AurelianSlotZero : public Handle {
 // CF-1 (nav_handle_internal.h): the ONE NavHandle implementation exported to
 // the conformance serve for the legion://chrome mount — no parallel handle.
 std::shared_ptr<Handle> MakeChromeNavHandle(const std::string& uri,
-                                            ChromeDispatchFn dispatch) {
+                                            BeginChromeDispatchFn dispatch) {
   return NavHandle::make(uri, std::move(dispatch));
 }
 
@@ -400,7 +426,7 @@ std::shared_ptr<Handle> MakeChromeNavHandle(const std::string& uri,
 // conformance serve exhibits the SAME surface (design §4.1).
 std::shared_ptr<Handle> MakeUnifiedSlotZero(
     std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
-    ChromeDispatchFn dispatch,
+    BeginChromeDispatchFn dispatch,
     const std::vector<uint8_t>& cap_anchor,
     ChromeWireSubscribeFn wire_subscribe,
     WireEventMailbox* mailbox) {
@@ -482,7 +508,7 @@ UdsRegister::~UdsRegister() {
 bool UdsRegister::Start(const std::string& socket_path,
                         const std::string& facet,
                         const std::string& peer_seed,
-                        ChromeDispatchFn dispatch,
+                        BeginChromeDispatchFn dispatch,
                         const std::vector<uint8_t>& cap_anchor,
                         ChromeWireSubscribeFn wire_subscribe) {
   impl_->channel = std::make_shared<velite::UdsChannel>();

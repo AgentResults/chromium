@@ -27,7 +27,7 @@ namespace aurelian {
 // `dispatch` (the ONE exported ChromeDispatchFn; HS-3 serialized value-only
 // spec). Deeper getResource chains compose as on the register-in wire.
 std::shared_ptr<velite::agentspaces::Handle> MakeChromeNavHandle(
-    const std::string& uri, ChromeDispatchFn dispatch);
+    const std::string& uri, BeginChromeDispatchFn dispatch);
 
 // CF-4: the ONE slot-0 wrapper (AurelianSlotZero, uds_register.cc — design
 // §4.2): the unified vendored bootstrap composed with the dispatchAt FOLD
@@ -37,7 +37,7 @@ std::shared_ptr<velite::agentspaces::Handle> MakeChromeNavHandle(
 // typed wire-eventing-unavailable decline.
 std::shared_ptr<velite::agentspaces::Handle> MakeUnifiedSlotZero(
     std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
-    ChromeDispatchFn dispatch,
+    BeginChromeDispatchFn dispatch,
     const std::vector<uint8_t>& cap_anchor,
     ChromeWireSubscribeFn wire_subscribe = {},
     WireEventMailbox* mailbox = nullptr);

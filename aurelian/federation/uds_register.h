@@ -39,6 +39,23 @@ namespace aurelian {
 using ChromeDispatchFn = std::function<std::string(
     const std::string& path, const std::string& serialized_spec)>;
 
+// CF-6 (design §6.1) — F8b: the ONE exported dispatch root changes
+// signature, named + inventoried. The begin-form is record-creating and
+// NON-BLOCKING: it creates the HS-1 completion record on the calling
+// (serve) thread PRE-POST (round-6: every record Stop()-flippable), posts
+// the UI dispatch, and returns the record — the caller wraps it in a
+// PendingDispatchHandle and the dispatcher's deferred-pending pump settles
+// it (N>1 in-flight per connection is then structural). The HS-3 typed
+// slot-ref refusal still runs synchronously on the serve thread BEFORE the
+// spec is serialized into this seam — a refusal never reaches the UI
+// thread. The synchronous ChromeDispatchFn above retires from the wire
+// path with the blocking bridge (design §6.2); it remains the in-process
+// boot/test shape only.
+struct CompletionRecord;
+using BeginChromeDispatchFn =
+    std::function<std::shared_ptr<CompletionRecord>(
+        const std::string& path, const std::string& serialized_spec)>;
+
 // CF-5 — the wire-subscribe registration seam (design §5.2): called on the
 // serve thread for a `legion-subscribe-remote` naming a chrome event-node
 // URI; the installed implementation constructs the producer-side
@@ -50,9 +67,10 @@ using ChromeDispatchFn = std::function<std::string(
 // serve loop drains it on the serve thread. Velite-free by construction
 // (the mailbox is opaque here).
 class WireEventMailbox;
-using ChromeWireSubscribeFn = std::function<std::string(
-    const std::string& uri, const std::string& sub_id,
-    WireEventMailbox* mailbox)>;
+using ChromeWireSubscribeFn =
+    std::function<std::shared_ptr<CompletionRecord>(
+        const std::string& uri, const std::string& sub_id,
+        WireEventMailbox* mailbox)>;
 
 class UdsRegister {
  public:
@@ -91,7 +109,7 @@ class UdsRegister {
   bool Start(const std::string& socket_path,
              const std::string& facet,
              const std::string& peer_seed,
-             ChromeDispatchFn dispatch,
+             BeginChromeDispatchFn dispatch,
              const std::vector<uint8_t>& cap_anchor,
              ChromeWireSubscribeFn wire_subscribe = {});
 

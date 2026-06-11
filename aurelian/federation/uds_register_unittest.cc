@@ -10,6 +10,8 @@
 
 #include "aurelian/federation/uds_register.h"
 
+#include "aurelian/federation/completion_bridge.h"
+
 #include <unistd.h>
 
 #include <atomic>
@@ -76,6 +78,17 @@ std::string TempSock() {
   return std::string("/tmp/aurelian-c9-") + std::to_string(::getpid()) + ".sock";
 }
 
+// CF-6 TEST-CHANGE: the begin-form fake — an already-completed record
+// carrying `reply` (the synchronous fakes' shape, deferred-form). Same
+// assertions everywhere; only the fake's constructor shape moved.
+std::shared_ptr<CompletionRecord> FakeCompleted(std::string reply) {
+  auto record = std::make_shared<CompletionRecord>();
+  record->reply = std::move(reply);
+  record->outcome.store(CompletionRecord::kCompleted);
+  record->event.Signal();
+  return record;
+}
+
 }  // namespace
 
 // The register client dials a real UDS + sends the update{Mount} register frame.
@@ -89,7 +102,9 @@ TEST(AurelianUdsRegisterTest, DialsAndSendsRegisterMountFrame) {
 
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(path, "chrome", "uds-unittest-seed",
-                        [](const std::string&, const std::string&) { return std::string("x"); },
+                        [](const std::string&, const std::string&) {
+                          return FakeCompleted("x");
+                        },
                         /*cap_anchor=*/{}))
       << "Start must connect to the UDS";
 
@@ -138,9 +153,9 @@ TEST(AurelianUdsRegisterTest, ForwardedDispatchAtResolvesViaDispatch) {
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(
       path, "chrome", "uds-unittest-seed",
-      [&dispatched](const std::string& p, const std::string&) -> std::string {
+      [&dispatched](const std::string& p, const std::string&) {
         dispatched.store(true);
-        return std::string("answer:") + p;  // e.g. answer:system/info
+        return FakeCompleted(std::string("answer:") + p);
       },
       /*cap_anchor=*/{}));
 
@@ -220,8 +235,8 @@ TEST(AurelianUdsRegisterTest, ForwardedGetResourceReturnsNavigableChild) {
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(
       path, "chrome", "uds-unittest-seed",
-      [](const std::string& p, const std::string&) -> std::string {
-        return std::string("answer:") + p;  // e.g. answer:system/info
+      [](const std::string& p, const std::string&) {
+        return FakeCompleted(std::string("answer:") + p);
       },
       /*cap_anchor=*/{}));
 
@@ -329,7 +344,7 @@ struct SpecWireHarness {
   std::unique_ptr<uint8_t[]> buf =
       std::make_unique<uint8_t[]>(velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES);
 
-  bool Start(ChromeDispatchFn dispatch,
+  bool Start(BeginChromeDispatchFn dispatch,
              const std::vector<uint8_t>& cap_anchor = {}) {
     sock_path = TempSock();
     ::unlink(sock_path.c_str());
@@ -407,10 +422,10 @@ TEST(AurelianUdsRegisterTest, ForwardedDispatchAtCarriesSpecSerialized) {
   std::string seen_path;
   std::string seen_spec = "<never-called>";
   ASSERT_TRUE(h.Start(
-      [&](const std::string& p, const std::string& s) -> std::string {
+      [&](const std::string& p, const std::string& s) {
         seen_path = p;
         seen_spec = s;
-        return std::string("ok");
+        return FakeCompleted("ok");
       }));
 
   uint32_t slot = h.hub->emit_ask(
@@ -439,9 +454,9 @@ TEST(AurelianUdsRegisterTest, NavHandleLeafAskCarriesSpec) {
   SpecWireHarness h;
   std::string seen_spec = "<never-called>";
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string& s) -> std::string {
+      [&](const std::string&, const std::string& s) {
         seen_spec = s;
-        return std::string("ok");
+        return FakeCompleted("ok");
       }));
 
   uint32_t r_slot = h.hub->emit_ask(
@@ -472,9 +487,9 @@ TEST(AurelianUdsRegisterTest, SlotRefBearingSpecRefusedTyped) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       }));
 
   uint32_t slot = h.hub->emit_ask(
@@ -593,9 +608,9 @@ TEST(AurelianUdsCapGateTest, ScopedCapAdmitsInSubtreeDispatch) {
   SpecWireHarness h;
   std::string seen_path = "<never-called>";
   ASSERT_TRUE(h.Start(
-      [&](const std::string& p, const std::string&) -> std::string {
+      [&](const std::string& p, const std::string&) {
         seen_path = p;
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -617,9 +632,9 @@ TEST(AurelianUdsCapGateTest, ScopedCapAdmitsBaseNodeItself) {
   SpecWireHarness h;
   std::string seen_path = "<never-called>";
   ASSERT_TRUE(h.Start(
-      [&](const std::string& p, const std::string&) -> std::string {
+      [&](const std::string& p, const std::string&) {
         seen_path = p;
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -641,9 +656,9 @@ TEST(AurelianUdsCapGateTest, ScopedCapRefusedOnSiblingTarget) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -668,9 +683,9 @@ TEST(AurelianUdsCapGateTest, ScopedCapRefusedOnPrefs) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -694,10 +709,10 @@ TEST(AurelianUdsCapGateTest, PageScopedCapDispatchesPageRefusesNetwork) {
   std::string seen_path = "<never-called>";
   std::atomic<int> dispatch_count{0};
   ASSERT_TRUE(h.Start(
-      [&](const std::string& p, const std::string&) -> std::string {
+      [&](const std::string& p, const std::string&) {
         seen_path = p;
         dispatch_count.fetch_add(1);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -729,9 +744,9 @@ TEST(AurelianUdsCapGateTest, ValidlySignedOutOfSubtreeCapRefused) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -753,9 +768,9 @@ TEST(AurelianUdsCapGateTest, WrongAnchorChainRefused) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -783,9 +798,9 @@ TEST(AurelianUdsCapGateTest, MalformedCapRefusedTyped) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -810,9 +825,9 @@ TEST(AurelianUdsCapGateTest, BroadeningDelegationRefused) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -844,9 +859,9 @@ TEST(AurelianUdsCapGateTest, ExpiredCapRefused) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 
@@ -872,9 +887,9 @@ TEST(AurelianUdsCapGateTest, CapWithNoProvisionedAnchorRefused) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       } /* no anchor */));
 
   Dispatcher::AnswerOutcome o = DispatchWithCap(
@@ -906,9 +921,9 @@ TEST(AurelianUdsMtuTest, SpecLegalLargeEnvelopeCrossesBothDirections) {
   SpecWireHarness h;
   std::string seen_path;
   ASSERT_TRUE(h.Start(
-      [&](const std::string& p, const std::string& s) -> std::string {
+      [&](const std::string& p, const std::string& s) {
         seen_path = p;
-        return s;  // echo the serialized spec: the reply leg carries it back
+        return FakeCompleted(s);  // echo: the reply leg carries it back
       }));
 
   const std::string big(900 * 1024, 'a');
@@ -939,9 +954,9 @@ TEST(AurelianUdsMtuTest, AboveMtuEnvelopeRefusedTypedClose) {
   SpecWireHarness h;
   std::atomic<bool> dispatched{false};
   ASSERT_TRUE(h.Start(
-      [&](const std::string&, const std::string&) -> std::string {
+      [&](const std::string&, const std::string&) {
         dispatched.store(true);
-        return std::string("ok");
+        return FakeCompleted("ok");
       }));
 
   std::vector<uint8_t> oversize(velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES + 1,
@@ -971,9 +986,9 @@ TEST(AurelianUdsCapGateTest, CaplessDispatchKeepsFacetAuthority) {
   SpecWireHarness h;
   std::string seen_path = "<never-called>";
   ASSERT_TRUE(h.Start(
-      [&](const std::string& p, const std::string&) -> std::string {
+      [&](const std::string& p, const std::string&) {
         seen_path = p;
-        return std::string("ok");
+        return FakeCompleted("ok");
       },
       f.AnchorBytes()));
 

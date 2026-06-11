@@ -17,7 +17,9 @@
 #include <string>
 
 #include "aurelian/bootstrap/browser_main_extra.h"
+#include "aurelian/federation/completion_bridge.h"
 #include "aurelian/handles/root/root_handle.h"
+#include "base/test/run_until.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,10 +33,17 @@ IN_PROC_BROWSER_TEST_F(AurelianOneRootBrowserTest, OneRootOneBridgeSite) {
   EXPECT_EQ(ChromeRootConstructionCountForTesting(), 1)
       << "the install must be the only root construction at boot";
 
-  // The production path: the bootstrap's exported dispatch fn over the
-  // INSTALLED root (the very fn the UDS register-in consumes).
-  EXPECT_EQ(InstalledChromeDispatch()("__getIdentity", std::string()),
-            "legion://chrome/")
+  // The production path: the bootstrap's exported BEGIN-form dispatch over
+  // the INSTALLED root (the very fn both wire bring-ups consume) — CF-6
+  // TEST-CHANGE: the begin-form posts and the record settles via the HS-1
+  // layer (the test pumps; same assertion substance).
+  std::shared_ptr<CompletionRecord> record =
+      InstalledBeginChromeDispatch()("__getIdentity", std::string());
+  ASSERT_TRUE(record);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return record->outcome.load() != CompletionRecord::kPending;
+  }));
+  EXPECT_EQ(record->reply, "legion://chrome/")
       << "the exported dispatch must resolve against the installed root";
 
   // The counted-construction audit: dispatching through the exported fn

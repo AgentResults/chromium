@@ -61,7 +61,7 @@ class ConformanceServe {
   // `wire_subscribe` (CF-5, optional): the wire-subscribe seam — the SAME
   // surface on both wires; empty = the typed unavailable decline.
   bool Start(const std::string& socket_path,
-             ChromeDispatchFn dispatch,
+             BeginChromeDispatchFn dispatch,
              const std::vector<uint8_t>& cap_anchor,
              base::OnceClosure on_disconnect,
              ChromeWireSubscribeFn wire_subscribe = {});

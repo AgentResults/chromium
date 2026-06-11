@@ -15,14 +15,17 @@ namespace aurelian {
 
 struct BrowserMainExtraImpl;
 
-// HS-3/ACM-2w (design section 5, round-3/4/5 contract): the ONE
-// ChromeDispatchFn, constructed once over the INSTALLED sealed root and
-// exported from the bootstrap — both wire bring-ups (the production UDS
-// register-in and the browsertest-only WSS scaffold) consume this same
-// function; nothing else may mint a root from ambient authority. Before the
-// one-shot install (or after teardown) the returned fn answers
-// "broken:no-root" — fail-closed, never a second root.
-ChromeDispatchFn InstalledChromeDispatch();
+// HS-3/ACM-2w + CF-6 (F8b): the ONE exported dispatch root, BEGIN-form —
+// constructed once over the INSTALLED sealed root; both wire bring-ups
+// (the production UDS register-in and the conformance serve) consume this
+// same function; nothing else may mint a root from ambient authority. It
+// is record-creating and NON-BLOCKING (design §6.1): the returned
+// CompletionRecord settles via the HS-1 session layer; before the one-shot
+// install (or after teardown) it completes "broken:no-root" — fail-closed,
+// never a second root. The synchronous InstalledChromeDispatch retired
+// with the blocking bridge (design §6.2, DELETE-default — no production
+// consumer remained).
+BeginChromeDispatchFn InstalledBeginChromeDispatch();
 
 class BrowserMainExtra : public ChromeBrowserMainExtraParts {
  public:
