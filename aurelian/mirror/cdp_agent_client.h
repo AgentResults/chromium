@@ -4,7 +4,7 @@
 
 // ACM-2 (HS-1): the content-layer half of the persistent CDP session — a
 // long-lived DevToolsAgentHostClient behind a plain API. Kept in a SEPARATE
-// no-RTTI source_set for the same reason as find_glue: it subclasses
+// no-RTTI source_set: it subclasses
 // content::DevToolsAgentHostClient, whose typeinfo is not emitted in
 // Chromium's no-RTTI build, so subclassing it from the RTTI-compiled
 // session TU would leave an undefined typeinfo at link time. The session

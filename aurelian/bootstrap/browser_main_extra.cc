@@ -16,7 +16,6 @@
 #include "aurelian/federation/bridge_dispatch.h"
 #include "aurelian/federation/completion_bridge.h"
 #include "aurelian/federation/uds_register.h"
-#include "aurelian/handles/browser/tab_handle.h"
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/media/aurelian_virtual_camera.h"
 #include "aurelian/media/aurelian_virtual_mic.h"
@@ -98,7 +97,6 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   // (the single shared model, also served to remote peers by the federation
   // layer). Erected by the one-shot install; owned via the C-API.
   ChromeRoot* root = nullptr;
-  std::unique_ptr<TabsHandleImpl> tabs_handle;
   // C9 — the machine-federation register-in (dials Agrippa's UDS, registers the
   // `chrome` facet; no inbound port). Stopped on teardown (dtor → Stop()).
   std::unique_ptr<UdsRegister> uds_register;
@@ -111,9 +109,9 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   // teardown (stops the pump + unmaps the ring).
   std::unique_ptr<AurelianVirtualMic> virtual_mic;
 
-  // tab_id -> impl (owned here; registry in tab_handle.cc mirrors)
-  std::map<content::WebContents*, std::unique_ptr<TabHandleImpl>> tab_impls;
-  // wc -> tab_id mapping
+  // wc -> tab_id mapping (the mount dedupe — a WebContents is observed once
+  // however many strip events report it; ACM-R(4) kept the lifecycle hook +
+  // this dedupe when the bespoke per-tab handles went, design section 7 F8)
   std::map<content::WebContents*, int64_t> wc_ids;
   // AU-CAP-LIVE — the operator cap trust anchor + a per-WebContents provisioner
   // that pushes it onto each renderer frame's membrane (so the real cap crypto
@@ -154,9 +152,7 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
 
   void MountTab(content::WebContents* wc) {
     if (wc_ids.count(wc)) return;  // already mounted
-    int64_t id = NextTabId();
-    wc_ids[wc] = id;
-    tab_impls[wc] = CreateTabHandle(wc, id);
+    wc_ids[wc] = NextTabId();
     // AU-CAP-LIVE — provision the operator anchor onto this tab's renderer
     // frames as they are created. A 32-byte anchor was published at boot.
     if (cap_anchor.size() == 32) {
@@ -166,11 +162,6 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   }
 
   void UnmountTab(content::WebContents* wc) {
-    auto it = tab_impls.find(wc);
-    if (it != tab_impls.end()) {
-      DestroyTabHandle(std::move(it->second));
-      tab_impls.erase(it);
-    }
     cap_provisioners.erase(wc);
     wc_ids.erase(wc);
   }
@@ -233,17 +224,14 @@ void BrowserMainExtra::PostCreateThreads() {
   // (InstalledChromeDispatch) resolves against from here to teardown.
   g_installed_root = impl_->root;
 
-  // 3. Create the tabs handle.
-  impl_->tabs_handle = CreateTabsHandle();
-
-  // 4. Prove the membrane is erected + its root reachable: walk it for
+  // 3. Prove the membrane is erected + its root reachable: walk it for
   //    identity (a settled answer — Completed by construction).
   std::string identity_result =
       RootDispatch(impl_->root, "__getIdentity").reply;
   LOG(WARNING) << "[aurelian] legion://chrome/ install-membrane sealed; "
                << "__getIdentity=" << identity_result;
 
-  // 5. C9 — register the SEALED chrome facet INTO Agrippa over the local UDS
+  // 4. C9 — register the SEALED chrome facet INTO Agrippa over the local UDS
   //    (AURELIAN-DESIGN §3.6/§13; the machine-fed Frontinus pattern). Aurelian
   //    opens NO inbound network port; the hub forwards a controller's leaf asks
   //    back as dispatchAt against the sealed root. A missing hub is fail-soft —

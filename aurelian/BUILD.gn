@@ -133,9 +133,8 @@ if (enable_aurelian) {
 
   # ACM-2 (HS-1): the content-layer half of the persistent session — the
   # long-lived DevToolsAgentHostClient behind a plain API. SEPARATE no-RTTI
-  # source_set for the same reason as find_glue: the content base's typeinfo
-  # is not emitted in the no-RTTI build, so the RTTI session TU cannot
-  # subclass it directly.
+  # source_set: the content base's typeinfo is not emitted in the no-RTTI
+  # build, so the RTTI session TU cannot subclass it directly.
   source_set("aurelian_cdp_agent_client") {
     sources = [
       "mirror/cdp_agent_client.cc",
@@ -436,31 +435,6 @@ if (enable_aurelian) {
     ]
   }
 
-  # Find-in-page observer glue. Kept in a SEPARATE no-RTTI source_set: it
-  # subclasses find_in_page::FindResultObserver (-> base::CheckedObserver),
-  # whose typeinfo is not emitted in Chromium's no-RTTI build. Subclassing it
-  # from the RTTI-compiled aurelian_handles TU would leave an undefined
-  # "typeinfo for base::CheckedObserver" at link time, so the observer lives
-  # here and the handle code talks to it through the plain find_glue.h API.
-  source_set("aurelian_find_glue") {
-    sources = [
-      "handles/browser/find_glue.cc",
-      "handles/browser/find_glue.h",
-    ]
-
-    deps = [
-      "//base",
-      "//components/find_in_page",
-      "//content/public/browser",
-      "//ui/gfx/geometry",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # Cap-token attenuation: predicates (C8.a) + signed delegation chain (C8.b).
   # No RTTI; uses Velite's crypto free functions for Ed25519.
   source_set("aurelian_capability") {
@@ -753,47 +727,6 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
-  # Velite handle code — compiled with RTTI.
-  source_set("aurelian_handles") {
-    sources = [
-      "handles/browser/tab_handle.cc",
-      "handles/browser/tab_handle.h",
-    ]
-
-    deps = [
-      ":aurelian_find_glue",
-      "//aurelian/public/mojom",
-      "//base",
-      "//components/input",
-      "//components/printing/browser/print_to_pdf",
-      "//components/printing/common:mojo_interfaces",
-      "//components/viz/common",
-      "//components/zoom",
-      "//content/public/browser",
-      "//mojo/public/cpp/bindings",
-      "//printing/buildflags",
-      "//printing/mojom",
-      "//skia",
-      "//third_party/blink/public/common",
-      "//ui/base",
-      "//ui/events:dom_keycode_converter",
-      "//ui/events:events_base",
-      "//ui/gfx/codec",
-      "//ui/gfx/geometry",
-      "//url",
-      "//velite",
-    ]
-
-    include_dirs = _velite_include_dirs
-
-    configs -= [
-      "//build/config/compiler:no_rtti",
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-    configs += [ "//build/config/compiler:rtti" ]
-  }
-
   # Bootstrap — compiled as normal Chromium code (no RTTI).
   source_set("aurelian") {
     sources = [
@@ -806,7 +739,6 @@ if (enable_aurelian) {
       ":aurelian_cap_anchor_provisioner",
       ":aurelian_completion_bridge",
       ":aurelian_embodiment_policy",
-      ":aurelian_handles",
       ":aurelian_install",
       ":aurelian_root",
       ":aurelian_uds_register",
@@ -1079,13 +1011,8 @@ if (enable_aurelian) {
       "catalog/session_context_browsertest.cc",
       "federation/one_root_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
-      "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
-      "handles/browser/find_handle_browsertest.cc",
-      "handles/browser/frame_handle_browsertest.cc",
-      "handles/browser/input_handle_browsertest.cc",
       "handles/browser/gpu_handle_browsertest.cc",
-      "handles/browser/print_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
       "handles/root/tab_reach_browsertest.cc",
       "membrane/install_browsertest.cc",
@@ -1095,11 +1022,8 @@ if (enable_aurelian) {
       "mirror/prefs_mirror_browsertest.cc",
       "mirror/services_mirror_browsertest.cc",
       "mirror/targets_mirror_browsertest.cc",
-      "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
-      "handles/browser/tab_handle_browsertest.cc",
       "handles/browser/tabstrip_handle_browsertest.cc",
-      "handles/browser/zoom_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
       "media/aurelian_virtual_camera_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
@@ -1118,7 +1042,6 @@ if (enable_aurelian) {
       ":aurelian_completion_bridge",
       ":aurelian_wire_serialize",
       ":aurelian_devtools",
-      ":aurelian_handles",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
       ":aurelian_install",
