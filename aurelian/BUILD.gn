@@ -43,28 +43,6 @@ if (enable_aurelian) {
     "$_velite_src/mt/compiler/include",
   ]
 
-  # Tabstrip open / close / activate (C1.x). No RTTI.
-  source_set("aurelian_tabstrip") {
-    sources = [
-      "handles/browser/tabstrip_handle.cc",
-      "handles/browser/tabstrip_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//chrome/browser/ui:ui",
-      "//chrome/browser/ui/tabs:tab_enums",
-      "//chrome/browser/ui/tabs:tab_strip",
-      "//content/public/browser",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # Install-membrane: the typed EmbodimentPolicy (C++ legion://types/
   # EmbodimentPolicy). No RTTI; no ambient deps. (AURELIAN-DESIGN.md §4.5)
   source_set("aurelian_embodiment_policy") {
@@ -311,17 +289,18 @@ if (enable_aurelian) {
       ":aurelian_surface_coverage_audit",
 
       ":aurelian_cdp_mirror",
+      ":aurelian_cdp_session",
       ":aurelian_prefs_mirror",
       ":aurelian_services_mirror",
       ":aurelian_targets_mirror",
       ":aurelian_embodiment_policy",
-      ":aurelian_gpu",
       ":aurelian_media",
-      ":aurelian_system",
-      ":aurelian_tabs_overview",
-      ":aurelian_tabstrip",
       ":aurelian_wire_serialize",
       "//base",
+      "//chrome/browser/ui",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//content/public/browser",
+      "//url",
       "//velite",
     ]
 
@@ -358,63 +337,6 @@ if (enable_aurelian) {
       "//build/config/clang:unsafe_buffers",
     ]
     configs += [ "//build/config/compiler:rtti" ]
-  }
-
-  # System info: browser + renderer process counts (C15.a). No RTTI.
-  source_set("aurelian_system") {
-    sources = [
-      "handles/browser/system_handle.cc",
-      "handles/browser/system_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # GPU info: active device + GL strings from GpuDataManager (C15.b). No RTTI.
-  source_set("aurelian_gpu") {
-    sources = [
-      "handles/browser/gpu_handle.cc",
-      "handles/browser/gpu_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-      "//gpu/config",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Browser-wide tab overview reached from the root (C9.c). No RTTI.
-  source_set("aurelian_tabs_overview") {
-    sources = [
-      "handles/browser/tabs_overview.cc",
-      "handles/browser/tabs_overview.h",
-    ]
-
-    deps = [
-      "//base",
-      "//chrome/browser/ui",
-      "//content/public/browser",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
   }
 
   # DevTools CDP-compat command surface (C7.d). No RTTI.
@@ -895,14 +817,6 @@ if (enable_aurelian) {
       "mirror/services_mirror.cc",
       "mirror/services_mirror.h",
       "handles/root/root_handle.cc",
-      "handles/browser/system_handle.cc",
-      "handles/browser/system_handle.h",
-      "handles/browser/tabs_overview.cc",
-      "handles/browser/tabs_overview.h",
-      "handles/browser/tabstrip_handle.cc",
-      "handles/browser/tabstrip_handle.h",
-      "handles/browser/gpu_handle.cc",
-      "handles/browser/gpu_handle.h",
       "handles/media/media_handles.cc",
       "handles/media/media_handles.h",
     ]
@@ -1012,7 +926,6 @@ if (enable_aurelian) {
       "federation/one_root_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
-      "handles/browser/gpu_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
       "handles/root/tab_reach_browsertest.cc",
       "membrane/install_browsertest.cc",
@@ -1022,8 +935,6 @@ if (enable_aurelian) {
       "mirror/prefs_mirror_browsertest.cc",
       "mirror/services_mirror_browsertest.cc",
       "mirror/targets_mirror_browsertest.cc",
-      "handles/browser/system_handle_browsertest.cc",
-      "handles/browser/tabstrip_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
       "media/aurelian_virtual_camera_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
@@ -1043,12 +954,9 @@ if (enable_aurelian) {
       ":aurelian_wire_serialize",
       ":aurelian_devtools",
       ":aurelian_embodiment_policy",
-      ":aurelian_gpu",
       ":aurelian_install",
       ":aurelian_root",
       ":aurelian_streams",
-      ":aurelian_system",
-      ":aurelian_tabstrip",
       ":aurelian_virtual_camera",
       "//aurelian/public/mojom",
       "//base",
@@ -1063,6 +971,7 @@ if (enable_aurelian) {
       "//components/keyed_service/core",
       "//content/public/browser",
       "//content/test:test_support",
+      "//gpu/config",
       "//mojo/public/cpp/bindings",
       "//net",
       "//net:test_support",

@@ -11,19 +11,23 @@
 
 #include "aurelian/handles/root/wire_serialize.h"
 
-#include "aurelian/handles/browser/gpu_handle.h"
-#include "aurelian/handles/browser/system_handle.h"
-#include "aurelian/handles/browser/tabs_overview.h"
-#include "aurelian/handles/browser/tabstrip_handle.h"
 #include "aurelian/handles/media/media_handles.h"
 #include "aurelian/handles/media/media_seam.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/mirror/cdp_mirror.h"
+#include "aurelian/mirror/cdp_session.h"
 #include "aurelian/mirror/prefs_mirror.h"
 #include "aurelian/mirror/services_mirror.h"
 #include "aurelian/mirror/targets_mirror.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/web_contents.h"
+#include "url/gurl.h"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/json_marshal.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -37,8 +41,79 @@ using velite::agentspaces::StateKind;
 using velite::agentspaces::Value;
 using velite::agentspaces::ValueHandle;
 
-// legion://chrome/system — a real browser capability reached by navigating from
-// the root.
+// ---------------------------------------------------------------------------
+// ACM-R(5) — the FOLD facades (design section 7): the kept facade verbs are
+// semantic conveniences whose IMPLEMENTATIONS delegate to the mirror — every
+// host fact that the descriptor models rides the ONE CdpSessionRegistry
+// (SystemInfo.* / Target.* / Page.*), reshaped at settle time into the
+// facade's convenience shape by the HS-1 layer itself (no parallel dispatch
+// machinery). What remains inline below is the recorded strip/selection
+// GLUE of the inventory FOLD table: active index, index->tab resolution,
+// the last-tab guard, and the committed-URL read — host-UI concepts the
+// descriptor does not model.
+// ---------------------------------------------------------------------------
+
+// Reads `key` from an object Value (null when absent / not an object).
+const Value* FindField(const Value& v, const std::string& key) {
+  if (!v.is_object()) {
+    return nullptr;
+  }
+  auto it = v.as_object().find(key);
+  return it == v.as_object().end() ? nullptr : &it->second;
+}
+
+// CDP numbers parse int-or-double depending on magnitude; the facade
+// reshapes read them leniently.
+int64_t AsIntLenient(const Value& v) {
+  if (v.is_int()) {
+    return v.as_int();
+  }
+  if (v.is_double()) {
+    return static_cast<int64_t>(v.as_double());
+  }
+  return 0;
+}
+
+// -- The recorded strip/selection glue (inventory FOLD table) --
+
+content::WebContents* TabAtIndexGlue(int index) {
+  Browser* browser = chrome::FindLastActive();
+  if (!browser) {
+    return nullptr;
+  }
+  TabStripModel* model = browser->tab_strip_model();
+  if (index < 0 || index >= model->count()) {
+    return nullptr;
+  }
+  return model->GetWebContentsAt(index);
+}
+
+int StripIndexOfGlue(content::WebContents* wc) {
+  Browser* browser = chrome::FindLastActive();
+  if (!browser || !wc) {
+    return -1;
+  }
+  const int index = browser->tab_strip_model()->GetIndexOfWebContents(wc);
+  return index == TabStripModel::kNoTab ? -1 : index;
+}
+
+int ActiveTabIndexGlue() {
+  Browser* browser = chrome::FindLastActive();
+  return browser ? browser->tab_strip_model()->active_index() : -1;
+}
+
+std::string ActiveTabUrlGlue() {
+  Browser* browser = chrome::FindLastActive();
+  if (!browser) {
+    return std::string();
+  }
+  content::WebContents* wc = browser->tab_strip_model()->GetActiveWebContents();
+  return wc ? wc->GetLastCommittedURL().spec() : std::string();
+}
+
+// legion://chrome/system — the system facade. FOLD: `info` is
+// SystemInfo.getProcessInfo through the browser-mirror session, reshaped at
+// settle to the facade's {browserPid, rendererCount} convenience shape.
 class SystemInfoHandle : public Handle {
  public:
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -55,11 +130,31 @@ class SystemInfoHandle : public Handle {
       return ValueHandle::make(Value(std::string("legion://chrome/system")));
     }
     if (msg == "info") {
-      SystemInfo info = GetSystemInfo();
-      return ValueHandle::make(Value::make_object({
-          {"browserPid", Value(info.browser_pid)},
-          {"rendererCount", Value(info.render_process_count)},
-      }));
+      return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
+          "SystemInfo.getProcessInfo", Value(),
+          base::BindOnce([](Value result) {
+            int64_t browser_pid = 0;
+            int64_t renderer_count = 0;
+            if (const Value* infos = FindField(result, "processInfo");
+                infos && infos->is_array()) {
+              for (const Value& entry : infos->as_array()) {
+                const Value* type = FindField(entry, "type");
+                const Value* id = FindField(entry, "id");
+                if (!type || !type->is_string() || !id) {
+                  continue;
+                }
+                if (type->as_string() == "browser") {
+                  browser_pid = AsIntLenient(*id);
+                } else if (type->as_string() == "renderer") {
+                  ++renderer_count;
+                }
+              }
+            }
+            return Value::make_object({
+                {"browserPid", Value(browser_pid)},
+                {"rendererCount", Value(renderer_count)},
+            });
+          }));
     }
     // No leaf handle exposes an unwrap path to its ambient reference; any
     // unknown message (including __ambient / unwrap probes) is refused.
@@ -72,8 +167,10 @@ class SystemInfoHandle : public Handle {
   Value identity_{std::string("legion://chrome/system")};
 };
 
-// legion://chrome/gpu — the browser's collected GPU info, reached from the
-// root (global query, no Browser* held).
+// legion://chrome/gpu — the gpu facade. FOLD: `info` is SystemInfo.getInfo
+// through the browser-mirror session, reshaped at settle to the facade's
+// {vendorId, deviceId, glVendor, glRenderer} shape (devices[0] + the
+// auxAttributes glVendor/glRenderer names gpu_info.cc writes).
 class GpuInfoHandle : public Handle {
  public:
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -88,13 +185,43 @@ class GpuInfoHandle : public Handle {
       return ValueHandle::make(Value(std::string("legion://chrome/gpu")));
     }
     if (msg == "info") {
-      GpuSummary gpu = GetGpuSummary();
-      return ValueHandle::make(Value::make_object({
-          {"vendorId", Value(static_cast<int>(gpu.vendor_id))},
-          {"deviceId", Value(static_cast<int>(gpu.device_id))},
-          {"glVendor", Value(gpu.gl_vendor)},
-          {"glRenderer", Value(gpu.gl_renderer)},
-      }));
+      return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
+          "SystemInfo.getInfo", Value(),
+          base::BindOnce([](Value result) {
+            int64_t vendor_id = 0;
+            int64_t device_id = 0;
+            std::string gl_vendor;
+            std::string gl_renderer;
+            if (const Value* gpu = FindField(result, "gpu")) {
+              if (const Value* devices = FindField(*gpu, "devices");
+                  devices && devices->is_array() &&
+                  !devices->as_array().empty()) {
+                const Value& device = devices->as_array().front();
+                if (const Value* v = FindField(device, "vendorId")) {
+                  vendor_id = AsIntLenient(*v);
+                }
+                if (const Value* v = FindField(device, "deviceId")) {
+                  device_id = AsIntLenient(*v);
+                }
+              }
+              if (const Value* aux = FindField(*gpu, "auxAttributes")) {
+                if (const Value* v = FindField(*aux, "glVendor");
+                    v && v->is_string()) {
+                  gl_vendor = v->as_string();
+                }
+                if (const Value* v = FindField(*aux, "glRenderer");
+                    v && v->is_string()) {
+                  gl_renderer = v->as_string();
+                }
+              }
+            }
+            return Value::make_object({
+                {"vendorId", Value(vendor_id)},
+                {"deviceId", Value(device_id)},
+                {"glVendor", Value(gl_vendor)},
+                {"glRenderer", Value(gl_renderer)},
+            });
+          }));
     }
     // No leaf handle exposes an unwrap path to its ambient reference; any
     // unknown message (including __ambient / unwrap probes) is refused.
@@ -108,10 +235,10 @@ class GpuInfoHandle : public Handle {
 };
 
 // legion://chrome/tabs/<index> — a single live tab, reached by a controller
-// walking the root. The interactive verbs (activate / close) mutate the live
-// strip via the last-active browser; `url` reads its committed location. This
-// is the per-tab reach that AU-TAB-REACH wires up: tabstrip_handle built these
-// ops but, until mounted here, nothing could reach them.
+// walking the root. FOLD: `activate` is Page.bringToFront on THAT target's
+// session; `close` is Target.closeTarget (after the pre-dispatch last-tab
+// guard — a window close is out of scope); `url` is the committed-URL glue
+// read. Index->target resolution is the recorded selection glue.
 class MountedTabHandle : public Handle {
  public:
   explicit MountedTabHandle(int index)
@@ -130,16 +257,41 @@ class MountedTabHandle : public Handle {
       return ValueHandle::make(identity_);
     }
     if (msg == "activate") {
-      return ValueHandle::make(Value(std::string(
-          ActivateTabGlobal(index_) ? "ok" : "bad-index")));
+      content::WebContents* wc = TabAtIndexGlue(index_);
+      if (!wc) {
+        return ValueHandle::make(Value(std::string("bad-index")));
+      }
+      return CdpSessionRegistry::Get().InvokeOnTarget(
+          content::DevToolsAgentHost::GetOrCreateFor(wc)->GetId(),
+          "Page.bringToFront", Value(),
+          base::BindOnce([](Value) { return Value(std::string("ok")); }));
     }
     if (msg == "close") {
-      // CloseTabGlobal refuses a bad index AND the browser's last tab.
-      return ValueHandle::make(Value(std::string(
-          CloseTabGlobal(index_) ? "ok" : "refused")));
+      content::WebContents* wc = TabAtIndexGlue(index_);
+      Browser* browser = chrome::FindLastActive();
+      if (!wc || !browser || browser->tab_strip_model()->count() <= 1) {
+        // A bad index or the browser's last tab (a window close is out of
+        // scope) — refused pre-dispatch, the recorded guard glue.
+        return ValueHandle::make(Value(std::string("refused")));
+      }
+      return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
+          "Target.closeTarget",
+          Value::make_object(
+              {{"targetId",
+                Value(content::DevToolsAgentHost::GetOrCreateFor(wc)
+                          ->GetId())}}),
+          base::BindOnce([](Value result) {
+            const Value* success = FindField(result, "success");
+            return Value(std::string(
+                success && success->is_bool() && !success->as_bool()
+                    ? "refused"
+                    : "ok"));
+          }));
     }
     if (msg == "url") {
-      return ValueHandle::make(Value(TabUrlGlobal(index_)));
+      content::WebContents* wc = TabAtIndexGlue(index_);
+      return ValueHandle::make(
+          Value(wc ? wc->GetLastCommittedURL().spec() : std::string()));
     }
     return ValueHandle::make_broken("unknown-message");
   }
@@ -152,9 +304,10 @@ class MountedTabHandle : public Handle {
 };
 
 // legion://chrome/tabs — the live, browser-wide tab strip reached from the
-// root (no Browser* held; queries BrowserList). Read verbs (count, activeUrl,
-// activeIndex) and the interactive `open`; a numeric child segment resolves to
-// the MountedTabHandle for that tab (activate / close / url).
+// root. FOLD: `count` is Target.getTargets reshaped to the open-page count;
+// `open` is Target.createTarget with the settle-time strip-index lookup;
+// activeUrl/activeIndex are the recorded strip/selection glue. A numeric
+// child segment resolves to the MountedTabHandle for that tab.
 class TabsOverviewHandle : public Handle {
  public:
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -171,19 +324,49 @@ class TabsOverviewHandle : public Handle {
       return ValueHandle::make(Value(std::string("legion://chrome/tabs")));
     }
     if (msg == "count") {
-      return ValueHandle::make(Value(GetTabsOverview().open_count));
+      return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
+          "Target.getTargets", Value(),
+          base::BindOnce([](Value result) {
+            int64_t count = 0;
+            if (const Value* infos = FindField(result, "targetInfos");
+                infos && infos->is_array()) {
+              for (const Value& info : infos->as_array()) {
+                const Value* type = FindField(info, "type");
+                if (type && type->is_string() &&
+                    type->as_string() == "page") {
+                  ++count;
+                }
+              }
+            }
+            return Value(count);
+          }));
     }
     if (msg == "activeUrl") {
-      return ValueHandle::make(Value(GetTabsOverview().active_url));
+      return ValueHandle::make(Value(ActiveTabUrlGlue()));
     }
     if (msg == "activeIndex") {
-      return ValueHandle::make(Value(ActiveTabIndexGlobal()));
+      return ValueHandle::make(Value(ActiveTabIndexGlue()));
     }
-    // Interactive: open a new (foreground) tab; returns its index, -1 on
-    // failure. Param-free (about:blank) — the controller then navigates the tab
-    // via the per-tab handle / nav surface.
+    // Interactive: open a new (foreground) tab; settles to its strip index,
+    // -1 on failure. Param-free (about:blank) — the controller then
+    // navigates the tab via its targets/<id>/cdp/... sub-mirror.
     if (msg == "open") {
-      return ValueHandle::make(Value(OpenTabGlobal("about:blank", true)));
+      return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
+          "Target.createTarget",
+          Value::make_object({{"url", Value(std::string("about:blank"))}}),
+          base::BindOnce([](Value result) {
+            // The settle-time strip-index lookup (recorded glue): resolve
+            // the created targetId to its WebContents and report the strip
+            // index the facade contract promises.
+            const Value* target_id = FindField(result, "targetId");
+            if (!target_id || !target_id->is_string()) {
+              return Value(-1);
+            }
+            scoped_refptr<content::DevToolsAgentHost> host =
+                content::DevToolsAgentHost::GetForId(target_id->as_string());
+            return Value(
+                StripIndexOfGlue(host ? host->GetWebContents() : nullptr));
+          }));
     }
     // A numeric child segment reaches a single live tab: legion://chrome/tabs/2
     // -> MountedTabHandle(2), exposing activate / close / url.

@@ -20,19 +20,37 @@
 #include "aurelian/membrane/install.h"
 
 #include <string>
+#include <utility>
 
 #include "aurelian/handles/root/root_handle.h"
+#include "aurelian/handles/root/wire_serialize.h"
 #include "aurelian/membrane/embodiment_policy.h"
+#include "base/test/run_until.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "velite/agentspaces-wire/agentspace.hpp"
+#include "velite/agentspaces-wire/handle.hpp"
 
 namespace aurelian {
 
 namespace {
 bool Contains(const std::string& haystack, const std::string& needle) {
   return haystack.find(needle) != std::string::npos;
+}
+
+// ACM-R(5): a granted facade verb settles through the HS-1 session layer;
+// the membrane probes below stay synchronous (refusals never dispatch).
+std::string DispatchAndWait(ChromeRoot* root, const std::string& path) {
+  DispatchOutcome outcome = RootDispatch(root, path);
+  if (outcome.kind == DispatchOutcome::Kind::kCompleted) {
+    return outcome.reply;
+  }
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return outcome.answer->state_kind() !=
+           velite::agentspaces::StateKind::Pending;
+  })) << "pending facade answer never settled";
+  return SerializeWireReply(outcome.answer);
 }
 }  // namespace
 
@@ -48,8 +66,8 @@ IN_PROC_BROWSER_TEST_F(AurelianInstallMembraneBrowserTest, SealsAmbientSurface) 
   ASSERT_NE(root, nullptr);
 
   // The granted capability is reachable through the membrane (real value).
-  EXPECT_TRUE(Contains(RootDispatch(root, "system/info").reply, "browserPid"))
-      << RootDispatch(root, "system/info").reply;
+  EXPECT_TRUE(Contains(DispatchAndWait(root, "system/info"), "browserPid"))
+      << DispatchAndWait(root, "system/info");
 
   // (a) Capabilities outside the policy are unreachable — broken('out-of-scope'),
   //     not a live tab strip / GPU surface.

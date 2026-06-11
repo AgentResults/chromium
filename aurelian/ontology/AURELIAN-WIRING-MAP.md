@@ -10,9 +10,9 @@ Regenerate: `python3 aurelian/ontology/surface_coverage_audit.py --src-root . --
 | targets | projector | TargetsMirror | CreateTargetsMirror | targets | legion://types/ChromeTarget<br>legion://types/ChromeTargets | mirror/targets_mirror.cc<br>mirror/targets_mirror.h |
 | prefs | projector | PrefsMirror | CreatePrefsMirror | prefs-registry | legion://types/ChromePreference<br>legion://types/ChromePreferences | mirror/prefs_mirror.cc<br>mirror/prefs_mirror.h |
 | services | projector | ServicesMirror | CreateServicesMirror | keyed-services-graph | legion://types/ChromeService<br>legion://types/ChromeServices | mirror/services_mirror.cc<br>mirror/services_mirror.h |
-| system | facade | — | — | — | — | handles/root/root_handle.cc<br>handles/browser/system_handle.cc<br>handles/browser/system_handle.h |
-| tabs | facade | — | — | — | — | handles/root/root_handle.cc<br>handles/browser/tabs_overview.cc<br>handles/browser/tabs_overview.h<br>handles/browser/tabstrip_handle.cc<br>handles/browser/tabstrip_handle.h |
-| gpu | facade | — | — | — | — | handles/root/root_handle.cc<br>handles/browser/gpu_handle.cc<br>handles/browser/gpu_handle.h |
+| system | facade | — | — | — | — | handles/root/root_handle.cc |
+| tabs | facade | — | — | — | — | handles/root/root_handle.cc |
+| gpu | facade | — | — | — | — | handles/root/root_handle.cc |
 | media | facade | — | — | — | — | handles/media/media_handles.cc<br>handles/media/media_handles.h |
 
 ## Layer-1 types -> IDENTIFIES -> Layer-3 canonical

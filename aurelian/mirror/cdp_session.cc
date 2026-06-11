@@ -60,9 +60,14 @@ class PendingCdpAnswer : public Handle {
   }
   void tell(std::string_view, const Value&) override {}
 
+  // ACM-R(5): the facade's optional settle-time reshaper (UI thread, value
+  // settlements only — a Broken settlement passes the host's refusal
+  // through untouched).
+  void set_reshaper(CdpReshaper reshaper) { reshaper_ = std::move(reshaper); }
+
   void SettleValue(Value v) {
     DCHECK(state_ == StateKind::Pending);
-    value_ = std::move(v);
+    value_ = reshaper_ ? std::move(reshaper_).Run(std::move(v)) : std::move(v);
     state_ = StateKind::ResolvedValue;
   }
 
@@ -78,6 +83,7 @@ class PendingCdpAnswer : public Handle {
   StateKind state_ = StateKind::Pending;
   Value value_;
   std::string reason_;
+  CdpReshaper reshaper_;
 };
 
 }  // namespace
@@ -129,7 +135,8 @@ class CdpSession {
   size_t in_flight_count() const { return in_flight_.size(); }
 
   std::shared_ptr<Handle> Invoke(const std::string& method,
-                                 const Value& params) {
+                                 const Value& params,
+                                 CdpReshaper reshaper = {}) {
     std::string params_json;
     if (params.is_null()) {
       params_json = "{}";
@@ -140,6 +147,9 @@ class CdpSession {
     }
 
     std::shared_ptr<PendingCdpAnswer> answer = PendingCdpAnswer::make();
+    if (reshaper) {
+      answer->set_reshaper(std::move(reshaper));
+    }
     const int id = next_id_++;
     in_flight_.emplace(id, answer);
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -318,23 +328,25 @@ CdpSession* CdpSessionRegistry::EnsureTargetSession(
 
 std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnBrowserTarget(
     const std::string& method,
-    const Value& params) {
+    const Value& params,
+    CdpReshaper reshaper) {
   CdpSession* session = EnsureBrowserSession();
   if (!session) {
     return ValueHandle::make_broken("cdp-attach-failed");
   }
-  return session->Invoke(method, params);
+  return session->Invoke(method, params, std::move(reshaper));
 }
 
 std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnTarget(
     const std::string& target_id,
     const std::string& method,
-    const Value& params) {
+    const Value& params,
+    CdpReshaper reshaper) {
   CdpSession* session = EnsureTargetSession(target_id);
   if (!session) {
     return ValueHandle::make_broken("cdp-attach-failed:no-such-target");
   }
-  return session->Invoke(method, params);
+  return session->Invoke(method, params, std::move(reshaper));
 }
 
 std::shared_ptr<Handle> CdpSessionRegistry::SubscribeOnBrowserTarget(

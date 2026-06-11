@@ -47,6 +47,7 @@
 #include "base/test/run_until.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -126,10 +127,14 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   }
   std::set<std::string> before_set = AsStringSet(*before);
 
-  // Open a second tab via the facade (about:blank, foreground). The new
-  // tab never had a DevTools session.
-  std::string open_reply = RootDispatch(root, "tabs/open").reply;
-  EXPECT_NE(open_reply, "-1") << open_reply;
+  // Open a second tab directly on the strip (about:blank, foreground).
+  // NOT via the facade: ACM-R(5) folded tabs/open onto Target.createTarget,
+  // which MINTS a DevTools host for the new tab — the F3 pin here needs a
+  // tab that genuinely never had one, so a GetAll()-based enumeration
+  // still cannot pass.
+  chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
+                   /*foreground=*/true);
+  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
 
   std::string after_reply = RootDispatch(root, "targets/__getChildren").reply;
   std::optional<base::ListValue> after = ParseList(after_reply);
@@ -144,7 +149,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
 
   // Tab-shaped asserts filter on `page` (design section 4: the mirror
   // reflects what Chromium reports — workers and the tab targets are
-  // enumerated too, typed). Exactly ONE new page target: the facade tab.
+  // enumerated too, typed). Exactly ONE new page target: the added tab.
   std::vector<std::string> new_page_ids;
   for (const std::string& uri : after_set) {
     if (before_set.count(uri)) {
@@ -167,7 +172,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
     }
   }
   EXPECT_EQ(new_page_ids.size(), 1u)
-      << "expected exactly one new page target (the facade tab): "
+      << "expected exactly one new page target (the added tab): "
       << after_reply;
 
   DestroyChromeRoot(root);

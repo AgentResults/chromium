@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/no_destructor.h"
 
 namespace velite::agentspaces {
@@ -34,6 +35,16 @@ namespace aurelian {
 // One persistent session on one target (defined in the .cc; named here so
 // the registry's lazy-attach helpers can be members).
 class CdpSession;
+
+// ACM-R(5): an optional SETTLE-TIME reshaper a FOLD facade verb threads
+// through its invoke — applied on the UI thread when the session layer
+// settles the answer VALUE (a Broken settlement passes through untouched,
+// the host's own refusal stays typed). The HS-1 layer owns settlement; the
+// facade owns only the shape of its convenience reply (design section 7:
+// facade verbs are semantic conveniences delegating to the mirror — no
+// parallel dispatch machinery).
+using CdpReshaper = base::OnceCallback<velite::agentspaces::Value(
+    velite::agentspaces::Value)>;
 
 class CdpSessionRegistry {
  public:
@@ -53,7 +64,8 @@ class CdpSessionRegistry {
   // returns an already-Broken handle.
   std::shared_ptr<velite::agentspaces::Handle> InvokeOnBrowserTarget(
       const std::string& method,
-      const velite::agentspaces::Value& params);
+      const velite::agentspaces::Value& params,
+      CdpReshaper reshaper = {});
 
   // ACM-3: same contract, on the PERSISTENT session of ONE enumerated
   // target (the id is DevToolsAgentHost::GetId()'s) — lazy attach on the
@@ -62,7 +74,8 @@ class CdpSessionRegistry {
   std::shared_ptr<velite::agentspaces::Handle> InvokeOnTarget(
       const std::string& target_id,
       const std::string& method,
-      const velite::agentspaces::Value& params);
+      const velite::agentspaces::Value& params,
+      CdpReshaper reshaper = {});
 
   // UI thread. Erases target sessions whose client detached (posted by the
   // close path — never run mid-callback).

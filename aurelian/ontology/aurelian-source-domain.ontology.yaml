@@ -74,7 +74,10 @@ types:
 # Every name the sealed root mounts (root_handle.cc ask_impl dispatch ==
 # EmbodimentPolicy::FullStandalone rows — the surface-coverage audit checks
 # the three-way equality). kind projector = mirror-owned; kind facade =
-# bespoke convenience surface whose section-7 disposition lands at ACM-R.
+# kept convenience surface with its executed section-7 disposition (ACM-R:
+# system/gpu/tabs verbs FOLDED onto the mirror sessions with the recorded
+# strip/selection glue — their support files deleted; media is the
+# KEEP-infrastructure virtual-A/V surface CDP has no ground for).
 roots:
   cdp:
     kind: projector
@@ -116,30 +119,22 @@ roots:
       - mirror/services_mirror.h
   system:
     kind: facade
-    disposition: pending-ACM-R
+    disposition: folded-to-mirror-ACM-R
     files:
       - handles/root/root_handle.cc
-      - handles/browser/system_handle.cc
-      - handles/browser/system_handle.h
   tabs:
     kind: facade
-    disposition: pending-ACM-R
+    disposition: folded-to-mirror-ACM-R
     files:
       - handles/root/root_handle.cc
-      - handles/browser/tabs_overview.cc
-      - handles/browser/tabs_overview.h
-      - handles/browser/tabstrip_handle.cc
-      - handles/browser/tabstrip_handle.h
   gpu:
     kind: facade
-    disposition: pending-ACM-R
+    disposition: folded-to-mirror-ACM-R
     files:
       - handles/root/root_handle.cc
-      - handles/browser/gpu_handle.cc
-      - handles/browser/gpu_handle.h
   media:
     kind: facade
-    disposition: pending-ACM-R
+    disposition: keep-infrastructure-ACM-R
     files:
       - handles/media/media_handles.cc
       - handles/media/media_handles.h
