@@ -6,7 +6,7 @@
 // carry EVERY value kind — bools, doubles, arrays, and nested objects — and
 // must JSON-escape string fields. The legacy hand-rolled form dropped the
 // richer kinds to "null" and emitted string fields unescaped (malformed /
-// injectable JSON on a real wire path: DispatchChromeRoot -> RootDispatch ->
+// injectable JSON on a real wire path: bridge dispatch -> RootDispatch ->
 // SerializeWireReply). These assertions fail against that legacy form.
 
 #include "aurelian/handles/root/wire_serialize.h"

@@ -564,28 +564,6 @@ if (enable_aurelian) {
     ]
   }
 
-  source_set("aurelian_federation") {
-    sources = [
-      "federation/wss_peer.cc",
-      "federation/wss_peer.h",
-    ]
-
-    deps = [
-      # The scaffold consumes the bootstrap's exported one-root dispatch
-      # (ACM-2w); its own lazy root is deleted.
-      ":aurelian",
-      "//base",
-      "//velite",
-    ]
-
-    include_dirs = _velite_include_dirs
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # AU-CAP-LIVE: provisions the operator cap trust anchor onto each renderer
   # frame's membrane at boot (the live half of C8). No RTTI; talks the
   # AurelianWire mojom to the renderer.
@@ -1100,7 +1078,6 @@ if (enable_aurelian) {
       "capability/cap_membrane_browsertest.cc",
       "catalog/session_context_browsertest.cc",
       "federation/one_root_browsertest.cc",
-      "federation/wss_peer_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
@@ -1141,7 +1118,6 @@ if (enable_aurelian) {
       ":aurelian_completion_bridge",
       ":aurelian_wire_serialize",
       ":aurelian_devtools",
-      ":aurelian_federation",
       ":aurelian_handles",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",

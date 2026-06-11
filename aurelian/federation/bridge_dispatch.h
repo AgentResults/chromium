@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 // HS-1 (ACM-2, AURELIAN-GENERIC-CONTROL-DESIGN section 3): the ONE
-// serve-thread blocking dispatch both wire bridge sites consume (the UDS
-// register-in lambda and the WSS scaffold's DispatchChromeRoot). Replaces
+// serve-thread blocking dispatch every wire bridge site consumes — today the
+// one production bring-up, the UDS register-in lambda (the WSS scaffold
+// consumed it too until ACM-R(3) deleted the scaffold). Replaces
 // the two inline post-and-block-a-WaitableEvent sites: the posted UI task
 // now STARTS the command and returns; the serve thread waits on its
 // completion record (created pre-post, so Stop()-coverable), and the HS-1

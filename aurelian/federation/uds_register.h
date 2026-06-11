@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 // Aurelian C9 — register the `chrome` facet INTO Agrippa over the local UDS
-// (AURELIAN-DESIGN.md §3.6/§13, the SHIPPED machine-federation pattern). Unlike
-// the bring-up WSS peer (wss_peer.h) — which LISTENS on a port — this is the
-// canonical, de-socketed path: Aurelian opens NO inbound network socket. It
+// (AURELIAN-DESIGN.md §3.6/§13, the SHIPPED machine-federation pattern). This
+// is the canonical, de-socketed path — the ONE production bring-up (the
+// C9-era WSS listener scaffold went at ACM-R(3), design section 7's
+// DELETE-default row): Aurelian opens NO inbound network socket. It
 // DIALS Agrippa's generation-stable registration UDS (~/.legion/agrippa.sock),
 // runs a substrate wire::Dispatcher whose slot-0 bootstrap resolves the sealed
 // legion://chrome/ root, and sends the register handshake

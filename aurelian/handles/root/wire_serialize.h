@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Aurelian: the federation-wire reply serializer. DispatchChromeRoot ->
+// Aurelian: the federation-wire reply serializer. The bridge dispatch ->
 // RootDispatch asks a leaf handle and serializes its reply to a transportable
 // string with this. Top-level string/int replies keep their bare scalar form
 // (the wire's "verb -> scalar" contract callers parse directly); every richer
