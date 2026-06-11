@@ -15,8 +15,10 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "aurelian/federation/uds_register.h"
+#include "velite/agentspaces-wire/conformance_bootstrap.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 
 namespace aurelian {
@@ -26,6 +28,14 @@ namespace aurelian {
 // spec). Deeper getResource chains compose as on the register-in wire.
 std::shared_ptr<velite::agentspaces::Handle> MakeChromeNavHandle(
     const std::string& uri, ChromeDispatchFn dispatch);
+
+// CF-4: the ONE slot-0 wrapper (AurelianSlotZero, uds_register.cc — design
+// §4.2): the unified vendored bootstrap composed with the dispatchAt FOLD
+// facade + chrome-subtree navigation. Both bring-up modes serve THIS.
+std::shared_ptr<velite::agentspaces::Handle> MakeUnifiedSlotZero(
+    std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
+    ChromeDispatchFn dispatch,
+    const std::vector<uint8_t>& cap_anchor);
 
 }  // namespace aurelian
 

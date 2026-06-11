@@ -22,11 +22,17 @@
 #include "aurelian/media/aurelian_virtual_mic.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -66,6 +72,64 @@ std::vector<uint8_t> ResolveCapAnchor() {
     base::HexStringToBytes(hex, &bytes);
   }
   return bytes;
+}
+
+// CF-4 — the browser's own peer identity seed, PERSISTED under the operator
+// config dir so the register-in destHash is stable across restarts
+// ([EMBODIMENT-REGISTERED-CHILD-OWN-IDENTITY]; warm-restart preservation per
+// bootstrap.md §1). Path override is the benign connectivity carveout
+// (AURELIAN_PEER_SEED_PATH, like AGRIPPA_UDS_PATH). First boot mints 32
+// random bytes (hex) and writes them 0600; every later boot reads the same
+// seed back — one identity per operator install, never per process.
+std::string ResolveAurelianPeerSeed() {
+  std::string path;
+  if (const char* p = std::getenv("AURELIAN_PEER_SEED_PATH"); p && *p) {
+    path = p;
+  } else {
+    const char* home = std::getenv("HOME");
+    path = std::string(home ? home : "/tmp") + "/.legion/aurelian/peer-seed";
+  }
+  // Boot-path identity I/O — raw syscalls (one tiny read, or a first-boot
+  // write), the same shape as the UdsChannel::connect this thread performs
+  // a few lines later; base's instrumented file APIs are friend-gated here.
+  {
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd >= 0) {
+      char buf[129];
+      const ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+      ::close(fd);
+      if (n > 0) {
+        std::string seed(buf, static_cast<size_t>(n));
+        while (!seed.empty() && (seed.back() == '\n' || seed.back() == ' ')) {
+          seed.pop_back();
+        }
+        if (!seed.empty()) {
+          return seed;
+        }
+      }
+    }
+  }
+  uint8_t raw[32];
+  base::RandBytes(raw);
+  const std::string seed = base::ToLowerASCII(base::HexEncode(raw));
+  // Best-effort persist (0600; parent dirs created). A write failure keeps
+  // this boot's identity ephemeral — registration still works, stability
+  // resumes once the operator config dir is writable.
+  const size_t slash = path.rfind('/');
+  if (slash != std::string::npos && slash > 0) {
+    for (size_t pos = path.find('/', 1);
+         pos != std::string::npos && pos <= slash;
+         pos = path.find('/', pos + 1)) {
+      ::mkdir(path.substr(0, pos).c_str(), 0700);  // EEXIST is fine
+    }
+    ::mkdir(path.substr(0, slash).c_str(), 0700);
+  }
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd >= 0) {
+    (void)!::write(fd, seed.data(), seed.size());
+    ::close(fd);
+  }
+  return seed;
 }
 
 // The installed sealed root the ONE exported dispatch closes over — set by
@@ -267,7 +331,7 @@ void BrowserMainExtra::PostCreateThreads() {
     const std::string serve_sock =
         command_line->GetSwitchValueASCII(kConformanceServeSwitch);
     const bool served = impl_->conformance_serve->Start(
-        serve_sock, InstalledChromeDispatch(),
+        serve_sock, InstalledChromeDispatch(), impl_->cap_anchor,
         // Launcher lane: the connection IS the browser lifetime (design
         // §2.3-07). CloseBrowserSoon is the canonical programmatic-close
         // entry (the CDP Browser.close path): it releases the DevTools
@@ -286,13 +350,17 @@ void BrowserMainExtra::PostCreateThreads() {
   const std::string sock = ResolveAgrippaSock();
   // ACM-8: the federation seam shares the SAME operator anchor the renderer
   // membranes get — one trust root for every membrane in this embodiment.
+  // CF-4: the register-in presents the browser's REAL persisted identity
+  // (the seed → seeded Ed25519 destHash), replacing the old literal.
   const bool dialed = impl_->uds_register->Start(
-      sock, "chrome", "aurelian-browser", InstalledChromeDispatch(),
+      sock, "chrome", ResolveAurelianPeerSeed(), InstalledChromeDispatch(),
       impl_->cap_anchor);
   LOG(WARNING) << "[aurelian] machine-hub register "
                << (dialed ? "dialed + registered facet chrome over"
                           : "no hub at")
-               << " " << sock;
+               << " " << sock
+               << (dialed ? " destHash=" + impl_->uds_register->dest_hash()
+                          : "");
 }
 
 void BrowserMainExtra::PreBrowserStart() {

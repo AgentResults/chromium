@@ -88,7 +88,7 @@ TEST(AurelianUdsRegisterTest, DialsAndSendsRegisterMountFrame) {
   ASSERT_TRUE(listener.listen(path.c_str())) << "listener bind failed";
 
   UdsRegister reg;
-  ASSERT_TRUE(reg.Start(path, "chrome", "ed25519:chromeDH",
+  ASSERT_TRUE(reg.Start(path, "chrome", "uds-unittest-seed",
                         [](const std::string&, const std::string&) { return std::string("x"); },
                         /*cap_anchor=*/{}))
       << "Start must connect to the UDS";
@@ -137,7 +137,7 @@ TEST(AurelianUdsRegisterTest, ForwardedDispatchAtResolvesViaDispatch) {
   std::atomic<bool> dispatched{false};
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(
-      path, "chrome", "ed25519:chromeDH",
+      path, "chrome", "uds-unittest-seed",
       [&dispatched](const std::string& p, const std::string&) -> std::string {
         dispatched.store(true);
         return std::string("answer:") + p;  // e.g. answer:system/info
@@ -219,7 +219,7 @@ TEST(AurelianUdsRegisterTest, ForwardedGetResourceReturnsNavigableChild) {
 
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(
-      path, "chrome", "ed25519:chromeDH",
+      path, "chrome", "uds-unittest-seed",
       [](const std::string& p, const std::string&) -> std::string {
         return std::string("answer:") + p;  // e.g. answer:system/info
       },
@@ -336,7 +336,7 @@ struct SpecWireHarness {
     if (!listener.listen(sock_path.c_str())) {
       return false;
     }
-    if (!reg.Start(sock_path, "chrome", "ed25519:chromeDH",
+    if (!reg.Start(sock_path, "chrome", "uds-unittest-seed",
                    std::move(dispatch), cap_anchor)) {
       return false;
     }

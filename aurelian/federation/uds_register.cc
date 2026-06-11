@@ -4,7 +4,10 @@
 
 #include "aurelian/federation/uds_register.h"
 
+#include "aurelian/conformance/facet_claims.h"
+#include "aurelian/conformance/unified_bootstrap.h"
 #include "aurelian/federation/nav_handle_internal.h"
+#include "aurelian/federation/serve_pump.h"
 
 #include <algorithm>
 #include <atomic>
@@ -19,6 +22,7 @@
 #include "velite/agentspaces-wire/dispatcher.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/json_marshal.hpp"
+#include "velite/agentspaces-wire/peer_session.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
 #include "velite/channel.hpp"
 #include "velite/uds_channel.hpp"
@@ -212,35 +216,47 @@ class NavHandle : public Handle {
   Value self_;
 };
 
-// The slot-0 bootstrap Aurelian serves to Agrippa over the UDS. Agrippa forwards
-// a controller's leaf ask as dispatchAt{uri,verb,spec}; this resolves it against
-// the sealed legion://chrome/ root via the injected ChromeDispatchFn and returns
-// the serialized reply as a value (the contract the WSS peer used). getResource
-// {uri} additionally returns a NAVIGABLE child handle (slot-exported via
-// HandlePromise) so a controller walks the tree — peer.getResource(uri).info()
-// — over the register wire, adopting the substrate's proven slot-ref primitive.
-class AurelianBootstrap : public Handle {
+// CF-4 (design §4.2) — the thin slot-0 wrapper: COMPOSES the unified
+// vendored bootstrap (delegate-everything — the canonical surface, mount
+// table, claims cap all live there) and intercepts exactly TWO message
+// families as the chrome-mount navigation facade:
+//
+//  - dispatchAt{uri,verb,spec?,cap?}: the kept keystone/Agrippa verb,
+//    reimplemented as a FOLD facade over the mounted chrome root — the
+//    ACM-8 cap gate runs FIRST (authority before arguments, semantics
+//    unchanged), then the ask resolves through the same NavHandle the
+//    mount table serves (HS-3 serialized value-only spec, the one
+//    wire-serialize reply path). Deleting it later costs one row.
+//  - getResource{uri} for chrome-SUBTREE uris: resolves THROUGH the
+//    mounted root (a child NavHandle, slot-exported via NavRef) — the
+//    mount's own navigation semantic; every other uri delegates to the
+//    vendored resolver ([EMBODIMENT-RESOLVER-IS-MOUNT-TABLE]).
+//
+// The wrapper owns no mount table, no verb table beyond the facade, no
+// state (the generic-control FOLD discipline). AurelianBootstrap (the
+// four-verb shim) is DELETED with this replacement — inventory row.
+class AurelianSlotZero : public Handle {
  public:
-  // `cap_anchor` is the operator cap trust anchor (32 bytes = provisioned;
-  // anything else = no anchor → a presented cap fail-closes typed). ACM-8:
-  // a dispatchAt frame carrying a `cap` field (serialized delegation chain)
-  // is gated through GateFederationDispatch BEFORE the dispatch runs —
-  // descendant-scoped attenuation at the seam. A capless frame keeps the
-  // connection's facet-level authority (Agrippa's mint gate authorized the
-  // registration — the proven keystone status quo).
-  static std::shared_ptr<AurelianBootstrap> make(
+  static std::shared_ptr<AurelianSlotZero> make(
+      std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
       ChromeDispatchFn dispatch,
       const std::vector<uint8_t>& cap_anchor) {
-    return std::shared_ptr<AurelianBootstrap>(
-        new AurelianBootstrap(std::move(dispatch), cap_anchor));
+    return std::shared_ptr<AurelianSlotZero>(new AurelianSlotZero(
+        std::move(vendored), std::move(dispatch), cap_anchor));
   }
 
   velite::agentspaces::StateKind state_kind() const override {
-    return velite::agentspaces::StateKind::ResolvedValue;
+    return vendored_->state_kind();
   }
-  const Value& resolved_value() const override { return self_; }
-  std::shared_ptr<Handle> resolved_handle() const override { return nullptr; }
-  std::string_view broken_reason() const override { return ""; }
+  const Value& resolved_value() const override {
+    return vendored_->resolved_value();
+  }
+  std::shared_ptr<Handle> resolved_handle() const override {
+    return vendored_->resolved_handle();
+  }
+  std::string_view broken_reason() const override {
+    return vendored_->broken_reason();
+  }
 
   std::shared_ptr<Handle> ask_impl(std::string_view msg,
                                    const Value& spec) override {
@@ -270,8 +286,13 @@ class AurelianBootstrap : public Handle {
           return ValueHandle::make_broken(denied);
         }
       }
-      // HS-3: the dispatchAt frame's `spec` field (absent = no spec) crosses
-      // the seam serialized + value-only.
+      // The FOLD body — the same seam a mounted-root leaf ask runs
+      // (NavHandle::ask_impl's leaf path verbatim): HS-3 value-only
+      // serialization (slot-ref specs refused typed) + the ONE dispatch
+      // fn over DerivePath. EVERY verb dispatches — __getIdentity
+      // included — preserving the keystone wire shape byte-for-byte
+      // ("legion://chrome/" comes from the sealed root, never from a
+      // navigation-layer intercept).
       const Value* sv = spec.object_get("spec");
       std::string spec_json;
       if (sv && !SerializeValueOnlySpec(*sv, &spec_json)) {
@@ -284,37 +305,44 @@ class AurelianBootstrap : public Handle {
       return ValueHandle::make(Value(std::move(reply)));
     }
     if (msg == "getResource") {
-      // Handle-returning navigation: return a navigable child (slot-exported)
-      // bound to `uri`, so the controller can ask it (and chain further).
+      // Chrome-subtree navigation resolves THROUGH the mount: a relative or
+      // chrome-prefixed uri mints the navigable child (slot-exported).
+      // legion://chrome itself and every non-chrome uri delegate to the
+      // vendored resolver (mount table, type URIs, claims-capped
+      // facilities).
       const Value* uv = spec.is_object() ? spec.object_get("uri") : nullptr;
-      if (!uv || !uv->is_string()) {
-        return ValueHandle::make_broken("legion://errors/InvalidArgument");
+      if (uv && uv->is_string()) {
+        const std::string& uri = uv->as_string();
+        const bool chrome_subtree =
+            uri.compare(0, sizeof(kChromeUriPrefix) - 1, kChromeUriPrefix) ==
+                0 ||
+            uri.rfind("legion://", 0) != 0;  // relative form
+        if (chrome_subtree && uri != kChromeUriPrefix) {
+          return NavRef::make(NavHandle::make(uri, dispatch_));
+        }
       }
-      return NavRef::make(NavHandle::make(uv->as_string(), dispatch_));
+      return vendored_->ask(msg, spec);
     }
-    if (msg == "__getIdentity") {
-      return ValueHandle::make(self_);
-    }
-    if (msg == "__getSchema") {
-      return ValueHandle::make_broken("schema-undisclosed");
-    }
-    return ValueHandle::make_broken("legion://errors/UnknownMessage");
+    return vendored_->ask(msg, spec);
   }
-  void tell(std::string_view, const Value&) override {}
+  void tell(std::string_view msg, const Value& data) override {
+    vendored_->tell(msg, data);
+  }
 
  private:
-  AurelianBootstrap(ChromeDispatchFn dispatch,
-                    const std::vector<uint8_t>& cap_anchor)
-      : dispatch_(std::move(dispatch)),
-        self_(std::string("legion://chrome")) {
+  AurelianSlotZero(
+      std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
+      ChromeDispatchFn dispatch,
+      const std::vector<uint8_t>& cap_anchor)
+      : vendored_(std::move(vendored)), dispatch_(std::move(dispatch)) {
     if (cap_anchor.size() == anchor_.size()) {
       std::copy(cap_anchor.begin(), cap_anchor.end(), anchor_.begin());
       has_anchor_ = true;
     }
   }
 
+  std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored_;
   ChromeDispatchFn dispatch_;
-  Value self_;
   // ACM-8: the operator cap trust anchor (the SAME anchor the renderer
   // membranes are provisioned with). No anchor → presented caps fail closed.
   PubKey anchor_{};
@@ -330,40 +358,64 @@ std::shared_ptr<Handle> MakeChromeNavHandle(const std::string& uri,
   return NavHandle::make(uri, std::move(dispatch));
 }
 
+// CF-4 (nav_handle_internal.h): the ONE slot-0 wrapper, exported so the
+// conformance serve exhibits the SAME surface (design §4.1).
+std::shared_ptr<Handle> MakeUnifiedSlotZero(
+    std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
+    ChromeDispatchFn dispatch,
+    const std::vector<uint8_t>& cap_anchor) {
+  return AurelianSlotZero::make(std::move(vendored), std::move(dispatch),
+                                cap_anchor);
+}
+
 struct UdsRegister::Impl {
   std::shared_ptr<velite::UdsChannel> channel;
   std::shared_ptr<Dispatcher> disp;
   std::thread serve_thread;
   std::atomic<bool> stop{false};
   std::atomic<bool> connected{false};
+  std::string dest_hash;
 
+  // The ONE serve loop (serve_pump.h, design §4.1) over the envelope-framed
+  // channel drain. The register-in stays RESIDENT across session close
+  // (production: lifetime is the browser's, not the connection's — the
+  // conformance serve is the mode whose lifetime IS the connection), and
+  // keeps DRAINING the channel after a typed close so a refused oversize
+  // body keeps discarding instead of wedging the sender (the ACM-9p
+  // framing-preserved contract; CF-4 found the wedge when an early exit
+  // stopped the reads). Only a hard channel close ends the loop.
   void Serve() {
     auto buf = std::make_unique<uint8_t[]>(kRxBuffer);
-    while (!stop.load()) {
-      bool did = false;
-      for (;;) {
-        size_t n = 0;
-        velite::ChannelError e = channel->recv(buf.get(), kRxBuffer, &n);
-        if (e == velite::ChannelError::MessageTooLarge) {
-          // ACM-9p: the channel refused an above-MTU envelope at header time
-          // (body drained, framing preserved); the session layer answers the
-          // spec's typed refusal — limits.md section 2 CLOSE{frame-too-large}.
-          disp->emit_close(std::string(
-              velite::agentspaces::limits::kReasonFrameTooLarge));
-          break;
-        }
-        if (e != velite::ChannelError::OK || n == 0) {
-          break;
-        }
-        did = true;
-        disp->on_inbound(
-            std::string(reinterpret_cast<const char*>(buf.get()), n));
-      }
-      disp->pump_pending_answers();
-      if (!did) {
-        base::PlatformThread::Sleep(base::Milliseconds(2));
-      }
-    }
+    RunServeLoop(
+        stop, *disp,
+        [this, &buf]() {
+          bool did = false;
+          for (;;) {
+            size_t n = 0;
+            velite::ChannelError e = channel->recv(buf.get(), kRxBuffer, &n);
+            if (e == velite::ChannelError::MessageTooLarge) {
+              // ACM-9p: the channel refused an above-MTU envelope at header
+              // time (body drained, framing preserved); the session layer
+              // answers the spec's typed refusal — limits.md section 2
+              // CLOSE{frame-too-large}.
+              disp->emit_close(std::string(
+                  velite::agentspaces::limits::kReasonFrameTooLarge));
+              did = true;  // keep draining: the discard path needs reads
+              continue;
+            }
+            if (e == velite::ChannelError::Closed) {
+              return ServeDrain::kEnded;  // hub gone — the serve ends
+            }
+            if (e != velite::ChannelError::OK || n == 0) {
+              break;
+            }
+            did = true;
+            disp->on_inbound(
+                std::string(reinterpret_cast<const char*>(buf.get()), n));
+          }
+          return did ? ServeDrain::kProgress : ServeDrain::kIdle;
+        },
+        []() { base::PlatformThread::Sleep(base::Milliseconds(2)); });
   }
 };
 
@@ -375,7 +427,7 @@ UdsRegister::~UdsRegister() {
 
 bool UdsRegister::Start(const std::string& socket_path,
                         const std::string& facet,
-                        const std::string& child_dest_hash,
+                        const std::string& peer_seed,
                         ChromeDispatchFn dispatch,
                         const std::vector<uint8_t>& cap_anchor) {
   impl_->channel = std::make_shared<velite::UdsChannel>();
@@ -383,17 +435,40 @@ bool UdsRegister::Start(const std::string& socket_path,
     impl_->channel.reset();
     return false;
   }
+  // CF-4 (design §4.1/§4.2): the UNIFIED bootstrap — the same construction
+  // the conformance serve runs (seeded identity, chrome mounted pre-seal,
+  // claims cap) — composed with the thin dispatchAt facade. Two bring-up
+  // modes, ONE surface.
+  auto vendored = BuildUnifiedBootstrap(
+      peer_seed, NavHandle::make(kChromeUriPrefix, dispatch));
   velite::UdsChannel* raw = impl_->channel.get();
   impl_->disp = std::make_shared<Dispatcher>(
-      AurelianBootstrap::make(std::move(dispatch), cap_anchor),
+      AurelianSlotZero::make(vendored, std::move(dispatch), cap_anchor),
       [raw](const std::string& frame) {
         raw->send(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
       });
+  auto bootstrap = vendored;
+  impl_->disp->set_audit([bootstrap](std::string event, std::string trace_id) {
+    bootstrap->record_audit(std::move(event), std::move(trace_id));
+  });
+  vendored->set_counterparty_dispatcher(impl_->disp.get());
+
+  // The browser's REAL identity ([EMBODIMENT-REGISTERED-CHILD-OWN-IDENTITY]):
+  // the seeded Ed25519 destHash, read off the unified bootstrap's own
+  // identity surface.
+  auto ident = vendored->ask("getOrgIdentity", Value());
+  if (ident &&
+      ident->state_kind() == velite::agentspaces::StateKind::ResolvedValue) {
+    if (const Value* dh = ident->resolved_value().object_get("destHash");
+        dh && dh->is_string()) {
+      impl_->dest_hash = dh->as_string();
+    }
+  }
 
   // The register handshake — the shipped UdsDispatcherLink::send_register frame.
   Value params = Value::make_object({
       {"facet", Value(facet)},
-      {"childDestHash", Value(child_dest_hash)},
+      {"childDestHash", Value(impl_->dest_hash)},
   });
   Value mount = Value::make_object({
       {"kind", Value(std::string("Mount"))},
@@ -403,6 +478,13 @@ bool UdsRegister::Start(const std::string& socket_path,
       {"params", std::move(params)},
   });
   impl_->disp->emit_ask(0, "update", std::move(mount));
+
+  // CF-4 (design §4.3): the computed facet manifest follows the register
+  // ask on THIS wire — the SAME set the conformance serve emits (facets.md
+  // §6a; the §3.5 pre-flight's second capture).
+  velite::agentspaces::wire::emit_session_handshake_with_facets(
+      *impl_->disp, aurelian_claimed_wire_facets(),
+      aurelian_claimed_internal_facets());
 
   impl_->connected.store(true);
   impl_->stop.store(false);
@@ -427,6 +509,10 @@ void UdsRegister::Stop() {
 
 bool UdsRegister::connected() const {
   return impl_ && impl_->connected.load();
+}
+
+const std::string& UdsRegister::dest_hash() const {
+  return impl_->dest_hash;
 }
 
 }  // namespace aurelian

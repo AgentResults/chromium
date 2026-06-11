@@ -17,7 +17,9 @@
 #include <utility>
 
 #include "aurelian/conformance/facet_claims.h"
+#include "aurelian/conformance/unified_bootstrap.h"
 #include "aurelian/federation/nav_handle_internal.h"
+#include "aurelian/federation/serve_pump.h"
 #include "base/logging.h"
 #include "velite/channel.hpp"
 #include "velite/agentspaces-wire/conformance_bootstrap.hpp"
@@ -66,60 +68,57 @@ struct ConformanceServe::Impl {
     return true;
   }
 
-  // The serve pump — the uds_register Serve loop shape (drain → on_inbound →
-  // pump_pending_answers → idle sleep via poll timeout) over raw NDJSON line
-  // reassembly instead of the envelope channel.
+  // The ONE serve loop (serve_pump.h, design §4.1) over the raw-NDJSON
+  // line-reassembly drain. [PROTOCOL-SESSION-TERMINATION-EQUALS-CLOSE]
+  // (scenario 07): the loop never pumps or emits after a session-scoped
+  // CLOSE dispatches — the force-break is local on both sides.
   void Serve() {
     auto buf = std::make_unique<char[]>(kRxBuffer);
     std::string acc;
-    for (;;) {
-      if (stop.load()) {
-        return;  // harness-owned shutdown: never initiate exit
-      }
-      struct pollfd pfd;
-      pfd.fd = fd;
-      pfd.events = POLLIN;
-      pfd.revents = 0;
-      const int pr = ::poll(&pfd, 1, 50);
-      if (pr <= 0) {
-        disp->pump_pending_answers();
-        continue;
-      }
-      const ssize_t n = ::read(fd, buf.get(), kRxBuffer);
-      if (n <= 0) {
-        break;  // EOF (launcher half-close / kill) or hard error
-      }
-      acc.append(buf.get(), static_cast<size_t>(n));
-      for (;;) {
-        const size_t nl = acc.find('\n');
-        if (nl == std::string::npos) {
-          break;
-        }
-        std::string frame = acc.substr(0, nl);
-        acc.erase(0, nl + 1);
-        if (!frame.empty()) {
-          disp->on_inbound(frame);
-        }
-        // [PROTOCOL-SESSION-TERMINATION-EQUALS-CLOSE] (scenario 07): the
-        // moment a session-scoped CLOSE dispatches, NOTHING more is pumped
-        // or emitted — the force-break of pending answer slots is LOCAL on
-        // both sides; a post-CLOSE __reject on the wire is forbidden. The
-        // run_ndjson_session discipline (its loop never pumps post-close).
-        if (disp->closed()) {
-          break;
-        }
-      }
-      if (disp->closed()) {
-        break;  // inbound session CLOSE — wind down silently (scenario 07)
-      }
-      disp->pump_pending_answers();
-    }
-    // The connection ended while Stop() has not flipped: launcher-lane
-    // semantics (design §2.3-07) — emit CLOSE{eof} if the session is still
-    // open (the peer_main.cpp EOF behaviour; the frame crosses the
-    // launcher's still-open read side), then exit-with-the-connection.
+    RunServeLoop(
+        stop, *disp,
+        [this, &buf, &acc]() {
+          struct pollfd pfd;
+          pfd.fd = fd;
+          pfd.events = POLLIN;
+          pfd.revents = 0;
+          const int pr = ::poll(&pfd, 1, 50);
+          if (pr <= 0) {
+            return ServeDrain::kIdle;
+          }
+          const ssize_t n = ::read(fd, buf.get(), kRxBuffer);
+          if (n <= 0) {
+            return ServeDrain::kEnded;  // EOF (launcher half-close) / error
+          }
+          acc.append(buf.get(), static_cast<size_t>(n));
+          for (;;) {
+            const size_t nl = acc.find('\n');
+            if (nl == std::string::npos) {
+              break;
+            }
+            std::string frame = acc.substr(0, nl);
+            acc.erase(0, nl + 1);
+            if (!frame.empty()) {
+              disp->on_inbound(frame);
+            }
+            if (disp->closed()) {
+              break;  // session over — nothing further dispatches
+            }
+          }
+          // Conformance-lane policy: a dispatched session CLOSE ends the
+          // serve (connection ≡ lifetime) — and nothing is pumped or
+          // emitted after it ([PROTOCOL-SESSION-TERMINATION-EQUALS-CLOSE],
+          // scenario 07).
+          return disp->closed() ? ServeDrain::kEnded : ServeDrain::kProgress;
+        },
+        []() {});  // poll() is the idle wait
+    // The connection/session ended while Stop() has not flipped:
+    // launcher-lane semantics (design §2.3-07) — emit CLOSE{eof} if the
+    // session is still open (the peer_main.cpp EOF behaviour; the frame
+    // crosses the launcher's still-open read side), then
+    // exit-with-the-connection.
     if (stop.load()) {
-      return;
+      return;  // harness-owned shutdown: never initiate exit
     }
     if (!disp->closed()) {
       disp->emit_close("eof");
@@ -139,6 +138,7 @@ ConformanceServe::~ConformanceServe() {
 
 bool ConformanceServe::Start(const std::string& socket_path,
                              ChromeDispatchFn dispatch,
+                             const std::vector<uint8_t>& cap_anchor,
                              base::OnceClosure on_disconnect) {
   // Raw connect-out (the launcher listens; NDJSON bytes, no envelope
   // framing — the launcher pumps these lines verbatim to the runner).
@@ -164,35 +164,17 @@ bool ConformanceServe::Start(const std::string& socket_path,
   impl_->fd = fd;
   impl_->on_disconnect = std::move(on_disconnect);
 
-  // The seeded vendored bootstrap (identity from VELITE_PEER_SEED via the
-  // vendored env path — the launcher forwards the runner's per-peer seed).
-  impl_->bootstrap = velite::agentspaces::wire::make_seeded_bootstrap("");
-
-  // The chrome mount, pre-seal (design §4.1: mount_resource is the
-  // embodiment-install primitive; the mounted handle is the ONE NavHandle
-  // root over the ONE exported dispatch).
-  impl_->bootstrap->mount_resource(
-      "legion://chrome",
-      MakeChromeNavHandle("legion://chrome", std::move(dispatch)));
-  impl_->bootstrap->seal();
-
-  // ONE claims set, two projections (design §3.2): the same computed set
-  // caps the exhibit side and rides the emitted manifest below.
-  {
-    std::set<std::string> claims;
-    for (const std::string& f : aurelian_claimed_wire_facets()) {
-      claims.insert(f);
-    }
-    for (const std::string& f : aurelian_claimed_internal_facets()) {
-      claims.insert(f);
-    }
-    impl_->bootstrap->apply_claims_cap(
-        std::make_shared<const std::set<std::string>>(std::move(claims)));
-  }
+  // CF-4 (design §4.1): the UNIFIED bootstrap construction — identical to
+  // the register-in's (seeded identity from VELITE_PEER_SEED via the
+  // vendored env path — the launcher forwards the runner's per-peer seed —
+  // chrome mounted pre-seal, claims cap), composed with the SAME slot-0
+  // wrapper. Two bring-up modes, ONE surface.
+  impl_->bootstrap = BuildUnifiedBootstrap(
+      "", MakeChromeNavHandle("legion://chrome", dispatch));
 
   Impl* impl = impl_.get();
   impl_->disp = std::make_shared<Dispatcher>(
-      impl_->bootstrap,
+      MakeUnifiedSlotZero(impl_->bootstrap, std::move(dispatch), cap_anchor),
       [impl](const std::string& frame) { impl->SendLine(frame); });
   auto bootstrap = impl_->bootstrap;
   impl_->disp->set_audit([bootstrap](std::string event, std::string trace_id) {

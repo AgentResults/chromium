@@ -409,6 +409,7 @@ if (enable_aurelian) {
   source_set("aurelian_uds_register") {
     sources = [
       "federation/nav_handle_internal.h",
+      "federation/serve_pump.h",
       "federation/uds_register.cc",
       "federation/uds_register.h",
     ]
@@ -416,6 +417,9 @@ if (enable_aurelian) {
     deps = [
       # ACM-8: the dispatchAt seam runs the federation cap gate.
       ":aurelian_capability",
+      # CF-4: the unified slot-0 construction + the computed manifest.
+      ":aurelian_conformance_claims",
+      ":aurelian_unified_bootstrap",
       "//base",
       "//velite",
     ]
@@ -718,10 +722,34 @@ if (enable_aurelian) {
     ]
   }
 
+  # CF-4 — the unified slot-0 bootstrap construction (design §4.1): seeded
+  # identity + chrome mount + seal + claims cap, ONE builder for both
+  # bring-up modes. The chrome root handle is passed in by the caller so
+  # this target stays federation-free (no cycle).
+  source_set("aurelian_unified_bootstrap") {
+    sources = [
+      "conformance/unified_bootstrap.cc",
+      "conformance/unified_bootstrap.h",
+    ]
+
+    deps = [
+      ":aurelian_conformance_claims",
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   # CF-1 — the conformance serve mode (design §2.1/§4.1): the canonical-
-  # runner bring-up. Connects out to the launcher's UDS, serves the vendored
-  # bootstrap (chrome mounted, claims-capped) over raw NDJSON lines, emits
-  # the computed __handshake. Velite-typed internally; pimpl-hidden header.
+  # runner bring-up. Connects out to the launcher's UDS, serves the unified
+  # slot-0 surface (chrome mounted, claims-capped) over raw NDJSON lines,
+  # emits the computed __handshake. Velite-typed internally; pimpl header.
   source_set("aurelian_conformance_serve") {
     sources = [
       "conformance/conformance_serve.cc",
@@ -731,6 +759,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_conformance_claims",
       ":aurelian_uds_register",
+      ":aurelian_unified_bootstrap",
       "//base",
       "//velite",
     ]

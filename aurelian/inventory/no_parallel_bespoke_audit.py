@@ -8,7 +8,8 @@
 The mirror REPLACED the bespoke surface; this GRC-14-style lock keeps it
 replaced. Scope: every .cc/.h under aurelian/handles/** (recursive), the
 federation bring-up set (federation/uds_register*, federation/wss_peer*,
-federation/nav_handle_internal*), capability/cap_gated_cookies*, the
+federation/nav_handle_internal*, federation/serve_pump*),
+capability/cap_gated_cookies*, the
 renderer Mojo bridge (renderer/**), the virtual-A/V layer (media/**) — the
 two KEEP families round-6 made the lock enforce like every other row — and
 the conformance layer (conformance/**, CF-1).
@@ -44,6 +45,7 @@ SCOPE_DIRS = ("handles", "renderer", "media", "conformance")
 # Prefix-glob scope (aurelian/-relative).
 SCOPE_PREFIXES = (
     "federation/nav_handle_internal",
+    "federation/serve_pump",
     "federation/uds_register",
     "federation/wss_peer",
     "capability/cap_gated_cookies",

@@ -48,10 +48,18 @@ class UdsRegister {
   UdsRegister& operator=(const UdsRegister&) = delete;
 
   // Dial Agrippa's registration UDS at `socket_path`, serve `facet`
-  // (e.g. "chrome") presenting `child_dest_hash` as the audit principal, and
-  // send the update{Mount} register frame. `dispatch` resolves forwarded leaf
-  // asks. Returns true iff the dial connected (the register frame was sent).
-  // Spawns a serve thread that pumps inbound forwarded asks until Stop().
+  // (e.g. "chrome"), and send the update{Mount} register frame presenting
+  // the browser's REAL destHash — derived from `peer_seed` via the seeded
+  // vendored identity ([EMBODIMENT-REGISTERED-CHILD-OWN-IDENTITY], CF-4;
+  // the caller persists the seed so the destHash is stable across
+  // restarts). The slot-0 surface is the UNIFIED bootstrap (the vendored
+  // ConformanceBootstrap with chrome mounted + the claims cap) composed
+  // with the thin dispatchAt facade (design §4.2) — the same surface the
+  // conformance serve exhibits — and the computed __handshake manifest is
+  // emitted after the register ask (facets.md §6a). `dispatch` resolves
+  // forwarded leaf asks. Returns true iff the dial connected (the register
+  // frame + handshake were sent). Spawns a serve thread that pumps inbound
+  // forwarded asks until Stop().
   //
   // ACM-8 (design section 5 prove-or-build): `cap_anchor` is the operator/
   // machine cap trust anchor (32-byte Ed25519 pub — the SAME anchor the
@@ -67,7 +75,7 @@ class UdsRegister {
   // the Agrippa mint gate authorized the registration).
   bool Start(const std::string& socket_path,
              const std::string& facet,
-             const std::string& child_dest_hash,
+             const std::string& peer_seed,
              ChromeDispatchFn dispatch,
              const std::vector<uint8_t>& cap_anchor);
 
@@ -75,6 +83,9 @@ class UdsRegister {
   void Stop();
 
   bool connected() const;
+
+  // The registered identity (32-hex destHash) — set by Start().
+  const std::string& dest_hash() const;
 
  private:
   struct Impl;

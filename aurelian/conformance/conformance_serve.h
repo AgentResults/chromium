@@ -26,8 +26,10 @@
 #ifndef AURELIAN_CONFORMANCE_CONFORMANCE_SERVE_H_
 #define AURELIAN_CONFORMANCE_CONFORMANCE_SERVE_H_
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "aurelian/federation/uds_register.h"
 #include "base/functional/callback.h"
@@ -48,14 +50,17 @@ class ConformanceServe {
 
   // Connect out to the UDS at `socket_path` and serve. `dispatch` resolves
   // chrome-mount leaf asks (the ONE exported ChromeDispatchFn).
-  // `on_disconnect` runs at most once, on the serve thread, when the
-  // connection ends while Stop() has NOT been initiated — the launcher-lane
-  // exit path ("browser lifetime ≡ connection lifetime in conformance
-  // mode"); under the browsertest harness the fixture holds the connection
-  // and Stop() flips first, so it never runs. Returns true iff connected
-  // and the handshake was emitted.
+  // `cap_anchor` is the operator cap trust anchor (CF-4: the unified slot-0
+  // wrapper carries the ACM-8 dispatchAt gate on this wire too — one
+  // surface, one authorization model). `on_disconnect` runs at most once,
+  // on the serve thread, when the connection ends while Stop() has NOT
+  // been initiated — the launcher-lane exit path ("browser lifetime ≡
+  // connection lifetime in conformance mode"); under the browsertest
+  // harness the fixture holds the connection and Stop() flips first, so it
+  // never runs. Returns true iff connected and the handshake was emitted.
   bool Start(const std::string& socket_path,
              ChromeDispatchFn dispatch,
+             const std::vector<uint8_t>& cap_anchor,
              base::OnceClosure on_disconnect);
 
   // Harness-owned shutdown: flip stopping, join the serve thread, close.

@@ -12,11 +12,13 @@
 #include <unistd.h>
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "aurelian/capability/cap_chain.h"
 #include "aurelian/capability/cap_wire.h"
+#include "aurelian/conformance/facet_claims.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -60,12 +62,32 @@ class HubBootstrap : public Handle {
       if (name && name->is_string()) {
         registered = name->as_string();
       }
+      // CF-4: record the register frame's childDestHash param (the real
+      // identity pin — [EMBODIMENT-REGISTERED-CHILD-OWN-IDENTITY]).
+      const Value* params =
+          spec.is_object() ? spec.object_get("params") : nullptr;
+      if (params && params->is_object()) {
+        const Value* dh = params->object_get("childDestHash");
+        if (dh && dh->is_string()) {
+          child_dest_hash = dh->as_string();
+        }
+      }
       return ValueHandle::make(Value(std::string("ok")));
     }
     return ValueHandle::make_broken("legion://errors/UnknownMessage");
   }
-  void tell(std::string_view, const Value&) override {}
+  // CF-4: the register-in wire must carry the __handshake facet manifest
+  // (facets.md §6a) after the Mount ask.
+  void tell(std::string_view msg, const Value& data) override {
+    if (msg == "__handshake") {
+      handshake = data;
+      has_handshake = true;
+    }
+  }
   std::string registered;
+  std::string child_dest_hash;
+  Value handshake;
+  bool has_handshake = false;
 
  private:
   Value self_{std::string("hub")};
@@ -204,6 +226,218 @@ IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
               ans.value.as_string() == "legion://chrome/")
       << "forwarded dispatchAt must reach the SEALED root (UI-hop), got: "
       << (ans.value.is_string() ? ans.value.as_string() : "<not-string>");
+}
+
+// ---------------------------------------------------------------------------
+// CF-4 — slot-0 unification on the register-in (conformant-federation design
+// §4): the production wire serves the SAME unified surface the corpus just
+// certified. Three pins, RED-first.
+// ---------------------------------------------------------------------------
+
+// (1) The slot-0 surface answers the CANONICAL bootstrap verbs (ping) AND the
+// kept dispatchAt facade (the keystone wire shape, unchanged) over the SAME
+// register-in UDS. RED today: AurelianBootstrap answers dispatchAt but
+// rejects ping with UnknownMessage.
+IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
+                       SlotZeroAnswersCanonicalSurface) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  velite::UdsChannel server;
+  velite::UdsListener::AcceptOutcome out =
+      velite::UdsListener::AcceptOutcome::NoneReady;
+  for (int i = 0;
+       i < 4000 && out != velite::UdsListener::AcceptOutcome::Accepted; ++i) {
+    out = listener_.accept(server, nullptr);
+    if (out == velite::UdsListener::AcceptOutcome::NoneReady) {
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+  }
+  ASSERT_EQ(out, velite::UdsListener::AcceptOutcome::Accepted);
+
+  velite::UdsChannel* raw = &server;
+  auto hub_bs = HubBootstrap::make();
+  Dispatcher hub(hub_bs, [raw](const std::string& f) {
+    raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
+  });
+  uint8_t buf[65536];
+  auto pump_hub = [&]() {
+    for (;;) {
+      size_t n = 0;
+      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+          n > 0) {
+        hub.on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+      } else {
+        break;
+      }
+    }
+    hub.pump_pending_answers();
+  };
+  auto spin = [&]() {
+    base::RunLoop loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, loop.QuitClosure(), base::Milliseconds(5));
+    loop.Run();
+  };
+  for (int i = 0; i < 800 && hub_bs->registered.empty(); ++i) {
+    pump_hub();
+    spin();
+  }
+  ASSERT_EQ(hub_bs->registered, "chrome");
+
+  auto settle = [&](uint32_t slot) {
+    Dispatcher::AnswerOutcome ans;
+    for (int i = 0; i < 800; ++i) {
+      pump_hub();
+      ans = hub.answer_outcome(slot);
+      if (ans.settled) {
+        break;
+      }
+      spin();
+    }
+    return ans;
+  };
+
+  // The canonical corpus verb on the PRODUCTION wire.
+  Dispatcher::AnswerOutcome pong = settle(hub.emit_ask(0, "ping", Value()));
+  ASSERT_TRUE(pong.settled) << "ping must settle over the register-in wire";
+  EXPECT_TRUE(pong.ok) << pong.reason;
+  EXPECT_TRUE(pong.value.is_string() && pong.value.as_string() == "pong")
+      << "slot 0 must answer the canonical surface (design §4.1)";
+
+  // The kept facade, unchanged keystone wire shape.
+  Dispatcher::AnswerOutcome ident = settle(hub.emit_ask(
+      0, "dispatchAt",
+      Value::make_object({{"uri", Value(std::string("legion://chrome"))},
+                          {"verb", Value(std::string("__getIdentity"))}})));
+  ASSERT_TRUE(ident.settled && ident.ok) << ident.reason;
+  EXPECT_TRUE(ident.value.is_string() &&
+              ident.value.as_string() == "legion://chrome/")
+      << "dispatchAt (the FOLD facade) must keep the keystone wire shape";
+}
+
+// (2) The register frame presents the browser's REAL destHash — the seeded
+// Ed25519 identity (32-hex first16(SHA-512(pub))), persisted so it is stable
+// across restarts — never the "aurelian-browser" literal.
+// [EMBODIMENT-REGISTERED-CHILD-OWN-IDENTITY]. RED today: the literal.
+IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
+                       RegisterPresentsRealDestHash) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  velite::UdsChannel server;
+  velite::UdsListener::AcceptOutcome out =
+      velite::UdsListener::AcceptOutcome::NoneReady;
+  for (int i = 0;
+       i < 4000 && out != velite::UdsListener::AcceptOutcome::Accepted; ++i) {
+    out = listener_.accept(server, nullptr);
+    if (out == velite::UdsListener::AcceptOutcome::NoneReady) {
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+  }
+  ASSERT_EQ(out, velite::UdsListener::AcceptOutcome::Accepted);
+
+  velite::UdsChannel* raw = &server;
+  auto hub_bs = HubBootstrap::make();
+  Dispatcher hub(hub_bs, [raw](const std::string& f) {
+    raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
+  });
+  uint8_t buf[65536];
+  auto pump_hub = [&]() {
+    for (;;) {
+      size_t n = 0;
+      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+          n > 0) {
+        hub.on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+      } else {
+        break;
+      }
+    }
+    hub.pump_pending_answers();
+  };
+  auto spin = [&]() {
+    base::RunLoop loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, loop.QuitClosure(), base::Milliseconds(5));
+    loop.Run();
+  };
+  for (int i = 0; i < 800 && hub_bs->child_dest_hash.empty(); ++i) {
+    pump_hub();
+    spin();
+  }
+  ASSERT_FALSE(hub_bs->child_dest_hash.empty())
+      << "the register Mount params must carry childDestHash";
+  EXPECT_NE(hub_bs->child_dest_hash, "aurelian-browser")
+      << "the literal must be replaced by the real identity";
+  EXPECT_EQ(hub_bs->child_dest_hash.size(), 32u)
+      << "destHash = hex(first16(SHA-512(pub))), got: "
+      << hub_bs->child_dest_hash;
+  EXPECT_TRUE(hub_bs->child_dest_hash.find_first_not_of(
+                  "0123456789abcdef") == std::string::npos)
+      << "destHash must be lowercase hex, got: " << hub_bs->child_dest_hash;
+}
+
+// (3) The __handshake facet manifest follows the register ask on THIS wire —
+// the SAME computed set the conformance serve emits (design §3.2/§3.5: the
+// second pre-flight artefact). RED today: no manifest on the register wire.
+IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
+                       HandshakeManifestOnRegisterWire) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  velite::UdsChannel server;
+  velite::UdsListener::AcceptOutcome out =
+      velite::UdsListener::AcceptOutcome::NoneReady;
+  for (int i = 0;
+       i < 4000 && out != velite::UdsListener::AcceptOutcome::Accepted; ++i) {
+    out = listener_.accept(server, nullptr);
+    if (out == velite::UdsListener::AcceptOutcome::NoneReady) {
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+  }
+  ASSERT_EQ(out, velite::UdsListener::AcceptOutcome::Accepted);
+
+  velite::UdsChannel* raw = &server;
+  auto hub_bs = HubBootstrap::make();
+  Dispatcher hub(hub_bs, [raw](const std::string& f) {
+    raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
+  });
+  uint8_t buf[65536];
+  auto pump_hub = [&]() {
+    for (;;) {
+      size_t n = 0;
+      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+          n > 0) {
+        hub.on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+      } else {
+        break;
+      }
+    }
+    hub.pump_pending_answers();
+  };
+  auto spin = [&]() {
+    base::RunLoop loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, loop.QuitClosure(), base::Milliseconds(5));
+    loop.Run();
+  };
+  for (int i = 0; i < 800 && !hub_bs->has_handshake; ++i) {
+    pump_hub();
+    spin();
+  }
+  ASSERT_TRUE(hub_bs->has_handshake)
+      << "a __handshake TELL must follow the register ask (facets.md §6a)";
+
+  std::set<std::string> wire;
+  if (const Value* arr = hub_bs->handshake.object_get("wireFacets");
+      arr && arr->is_array()) {
+    for (const Value& v : arr->as_array()) {
+      if (v.is_string()) {
+        wire.insert(v.as_string());
+      }
+    }
+  }
+  const std::vector<std::string>& claimed = aurelian_claimed_wire_facets();
+  EXPECT_EQ(wire, std::set<std::string>(claimed.begin(), claimed.end()))
+      << "the register-in wire must emit the SAME computed manifest the "
+         "conformance serve emits (design §3.5 pre-flight artefact 2)";
 }
 
 // ---------------------------------------------------------------------------
