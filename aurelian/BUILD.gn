@@ -689,6 +689,7 @@ if (enable_aurelian) {
       "capability/cap_membrane_unittest.cc",
       "capability/cap_predicate_unittest.cc",
       "federation/completion_bridge_unittest.cc",
+      "federation/conformance_bootstrap_link_unittest.cc",
       "federation/uds_register_unittest.cc",
       "handles/media/media_seam_unittest.cc",
       "media/aurelian_virtual_mic_unittest.cc",

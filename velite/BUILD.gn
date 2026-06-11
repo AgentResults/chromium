@@ -229,6 +229,7 @@ source_set("velite_dataflow") {
     "$_velite_src/dataflow/src/canonical_encode.cpp",
     "$_velite_src/dataflow/src/catalogue.cpp",
     "$_velite_src/dataflow/src/compile.cpp",
+    "$_velite_src/dataflow/src/constraint_filter.cpp",
     "$_velite_src/dataflow/src/datalog.cpp",
     "$_velite_src/dataflow/src/distinct.cpp",
     "$_velite_src/dataflow/src/expr.cpp",
@@ -237,6 +238,7 @@ source_set("velite_dataflow") {
     "$_velite_src/dataflow/src/lftj.cpp",
     "$_velite_src/dataflow/src/linear.cpp",
     "$_velite_src/dataflow/src/reduce.cpp",
+    "$_velite_src/dataflow/src/scheduler.cpp",
     "$_velite_src/dataflow/src/subscribe.cpp",
   ]
   include_dirs = _velite_include_dirs
@@ -336,10 +338,117 @@ source_set("velite_forth_compiler") {
   ]
 }
 
+# --- KG facility (KgHandle's canonical store backends; loaded into the link
+# once the vendored bootstrap's kg factory lights, CF-0) ---
+source_set("velite_kg") {
+  sources = [
+    "$_velite_src/kg/src/entities.cpp",
+    "$_velite_src/kg/src/file_kg_store.cpp",
+    "$_velite_src/kg/src/signed_fact.cpp",
+    "$_velite_src/kg/src/spec_eval.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Ontology facility (RelationRegistry + subsumption; loaded once the
+# vendored bootstrap's ontology factory lights, CF-0) ---
+source_set("velite_ontology") {
+  sources = [
+    "$_velite_src/ontology/src/relations.cpp",
+    "$_velite_src/ontology/src/subsumption.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Search facility (Corpus; loaded once the vendored bootstrap's search
+# factory lights, CF-0) ---
+source_set("velite_search") {
+  sources = [ "$_velite_src/search/src/corpus.cpp" ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Cells lattices (vm_bridge's cell primitives bind the *Lattice vtables;
+# loaded into the link once the vendored bootstrap compiles, CF-0) ---
+source_set("velite_cells") {
+  sources = [
+    "$_velite_src/cells/src/cell.cpp",
+    "$_velite_src/cells/src/lattices.cpp",
+    "$_velite_src/cells/src/supported_value.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
+# --- Datastore (DatastoreHandle's velite::datastore::DataStore; loaded into
+# the link once the vendored bootstrap's datastore factory lights, CF-0) ---
+source_set("velite_datastore") {
+  sources = [ "$_velite_src/datastore/src/store.cpp" ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+}
+
 # --- MT runtime + compiler + bridge + primitives ---
 source_set("velite_mt") {
   sources = [
     "$_velite_src/mt/bridge/vm_bridge.cpp",
+    # z3_wrapper.cpp: velite_z3_check_sat/_solve, subprocess-based (no Z3 SDK
+    # link; degrades to "unknown" when no z3 binary is on PATH). vm_bridge's
+    # SMT primitives reference it (CF-0: vm_bridge.o is loaded once the
+    # vendored bootstrap's components factory lights).
+    "$_velite_src/mt/bridge/z3_wrapper.cpp",
     "$_velite_src/mt/compiler/adapt_resolver.cpp",
     "$_velite_src/mt/compiler/emit.cpp",
     "$_velite_src/mt/compiler/handler_step_emitter.cpp",
@@ -355,6 +464,7 @@ source_set("velite_mt") {
     "$_velite_src/mt/primitives/heap.cpp",
     "$_velite_src/mt/primitives/tagged_ops.cpp",
     "$_velite_src/mt/primitives/trackers.cpp",
+    "$_velite_src/mt/regex/nfa.cpp",
     "$_velite_src/mt/runtime/runtime.cpp",
     "$_velite_src/mt/runtime/tagged_cell.cpp",
   ]
@@ -376,18 +486,28 @@ source_set("velite_mt") {
 source_set("velite_wire") {
   sources = [
     "$_velite_src/agentspaces-wire/src/agentspace.cpp",
+    "$_velite_src/agentspaces-wire/src/bootstrap_handles.cpp",
+    "$_velite_src/agentspaces-wire/src/bootstrap_verbs.cpp",
     "$_velite_src/agentspaces-wire/src/capability_handle.cpp",
     "$_velite_src/agentspaces-wire/src/component_instance_handle.cpp",
     "$_velite_src/agentspaces-wire/src/component_registry_handle.cpp",
-    # TEMP-WORKAROUND (2026-06-04): conformance_bootstrap.cpp is excluded — an
-    # upstream Velite refactor left it referencing kg_handle_concrete_ (a member
-    # declared only under #ifdef LEGION_HAS_FEDERATED_KG) OUTSIDE that guard, so
-    # it fails to compile in this (flag-off) embedded build. Aurelian does not
-    # use ConformanceBootstrap (it mounts its own root handle), so dropping it is
-    # safe. Restore once the upstream guard mismatch is fixed.
-    # "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
+    # conformance_bootstrap.cpp RESTORED (CF-0, 2026-06-11): the 2026-06-04
+    # TEMP-WORKAROUND excluded it because an upstream refactor referenced
+    # kg_handle_concrete_ (declared only under #ifdef LEGION_HAS_FEDERATED_KG)
+    # outside that guard. The upstream guard mismatch is fixed — every use now
+    # sits inside the guard (conformance_bootstrap.hpp:769-776,
+    # conformance_bootstrap.cpp SU-3 sites, bootstrap_verbs.cpp federated-kg
+    # factory block) — so the restore condition is met. LEGION_HAS_FEDERATED_KG
+    # stays UNDEFINED in this embedded build (the guarded federated-kg surface
+    # is build-excluded by design; see AURELIAN-CONFORMANT-FEDERATION-DESIGN.md
+    # §1.2/§3.2). The conformance-peer surface (this file + the six splits
+    # extracted from it upstream: bootstrap_verbs, bootstrap_handles,
+    # peer_session, facet_manifest, value_cbor, query_dataflow) is consumed by
+    # Aurelian's conformance serve from CF-0 on.
+    "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
     "$_velite_src/agentspaces-wire/src/datastore_handle.cpp",
     "$_velite_src/agentspaces-wire/src/dispatcher.cpp",
+    "$_velite_src/agentspaces-wire/src/facet_manifest.cpp",
     "$_velite_src/agentspaces-wire/src/fact_handle.cpp",
     "$_velite_src/agentspaces-wire/src/federated_kg_handle.cpp",
     "$_velite_src/agentspaces-wire/src/frames.cpp",
@@ -405,9 +525,12 @@ source_set("velite_wire") {
     "$_velite_src/agentspaces-wire/src/ocapn_session.cpp",
     "$_velite_src/agentspaces-wire/src/ocapn_syrup.cpp",
     "$_velite_src/agentspaces-wire/src/ontology_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/peer_session.cpp",
+    "$_velite_src/agentspaces-wire/src/query_dataflow.cpp",
     "$_velite_src/agentspaces-wire/src/resources_handle.cpp",
     "$_velite_src/agentspaces-wire/src/search_handle.cpp",
     "$_velite_src/agentspaces-wire/src/type_registry.cpp",
+    "$_velite_src/agentspaces-wire/src/value_cbor.cpp",
     "$_velite_src/agentspaces-wire/src/version.cpp",
     "$_velite_src/agentspaces-wire/src/wire_marshal.cpp",
   ]
@@ -430,15 +553,20 @@ source_set("velite_wire") {
 static_library("velite") {
   deps = [
     ":monocypher",
+    ":velite_cells",
     ":velite_channel",
     ":velite_core",
+    ":velite_datastore",
     ":velite_envelopes",
     ":velite_dataflow",
     ":velite_forth",
     ":velite_forth_compiler",
     ":velite_forth_handle",
     ":velite_handle",
+    ":velite_kg",
     ":velite_mt",
+    ":velite_ontology",
+    ":velite_search",
     ":velite_wire",
   ]
   complete_static_lib = true
