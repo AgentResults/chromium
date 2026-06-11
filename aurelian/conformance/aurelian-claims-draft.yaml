@@ -1,0 +1,408 @@
+# aurelian-claims-draft.yaml — the drafted matrix column block (Input B).
+#
+# CF-1 deliverable (AURELIAN-CONFORMANT-FEDERATION-DESIGN.md §3.3a-D4a,
+# TDD plan CF-1/CF-V): the machine-readable form of design §3.3b — claimed ∪
+# queued ∪ not-claimed ∪ out-of-scope rows, the per-row disposition
+# exclusions, and the CLOSED no-row prefix list, carried as DATA. This file
+# is the CF-V classifier's Input B (the banked __handshake capture is Input
+# A; A ⊆ B's claimed rows is asserted), and it becomes the embodiments.yaml
+# aurelian column at CF-10's flip. Kept in LOCKSTEP with facet_claims.{h,cc}
+# (the compiled projection of the claimed rows).
+#
+# Census snapshot (re-verified 2026-06-11 against Legion e619076303 corpus):
+# 692 sub-facet entries, 385 distinct facets. Statuses are written for the
+# moment CF-10 lands; the §3.3 closure rule executes at CF-V (red claimed →
+# queued downgrade or core-DEFECT block; green CF-V-mandatory queued → flip).
+#
+# R6-F1 RESOLUTION (recorded, the foldable review residual): the kg/
+# subscription named pass runs ALL FOUR single-peer vectors —
+# subscription-cursor-replay INCLUDED, expected red (no cursor surface),
+# exactly the kg/persistence expected-red treatment. Step-3 counts become
+# 7 queued probes / 8 executions; CF-V wall-clock 166. Ground: uniform
+# mechanism (every queued single-peer vector runs and banks its outcome),
+# no assertion-by-proxy.
+
+meta:
+  id: aurelian
+  design: AURELIAN-CONFORMANT-FEDERATION-DESIGN.md §3.3b (Legion da18161e79)
+  census: { entries: 692, distinct-facets: 385, legion: e619076303 }
+  prefix: "legion://facets/"   # every facet below elides this prefix
+
+# === CLAIMED (wire axis) — MUST equal facet_claims.cc's wire projection ===
+# (floor first; build-conditioned families annotated)
+claimed-wire:
+  # the v0.1 universal floor
+  - envelopes/wire-canonical-signing-form
+  - protocol/wire-three-frames-only
+  - identity/wire-ed25519
+  - sessions/wire-handshake
+  - conduits/wire-at-least-one-declared
+  # envelopes
+  - envelopes/canonical-signing-form
+  # L0 core
+  - conformance/wire-bootstrap-surface
+  - handles/wire-respond-to-ask
+  - handles/wire-accept-tells
+  - handles/wire-settlement
+  - revocation/wire-cascade-drop-frames
+  - revocation
+  - handoff/wire-three-vat-handshake
+  - handoff
+  - protocol/wire-slot-lifecycle
+  - errors/wire-typed-tree
+  # dispatcher-core protocol family (uncappable: closure branch 1-core)
+  - protocol/wire-slot-zero-bootstrap
+  - protocol/wire-close-and-disconnect-settle
+  - protocol/wire-close-cascade
+  - protocol/wire-drop-propagation
+  - protocol/wire-drop-reason-disambiguates
+  - protocol/wire-pipelining-buffer
+  - protocol/wire-round-trip-identity
+  - protocol/wire-nested-handle-depth
+  - protocol/wire-placeholder-determined-fields
+  - protocol/wire-placeholder-redispatch-cross-as
+  - protocol/wire-substrate-retry-sequencing
+  - protocol/wire-uri-derivation-pure
+  # errors family (uncappable core)
+  - errors/wire-audit-records-refusal
+  - errors/wire-broken-state-carries-reason
+  - errors/wire-no-exceptions-on-wire
+  - errors/wire-propagation-pipeline
+  # handle-core family (uncappable core)
+  - handles/wire-two-verbs
+  - handles/wire-verbs-one-way
+  - handles/wire-no-throw
+  - handles/wire-reject-unknown-messages
+  - handles/wire-reference-equality-identity
+  - handles/wire-identity-immutable
+  - handles/wire-hardened-at-construction
+  - handles/wire-schema-hardened
+  - handles/wire-deterministic-dispatch
+  - handles/wire-four-acquisition-rules
+  - handles/wire-no-ambient-acquisition
+  - handles/wire-no-ambient-state-read
+  - handles/wire-no-extra-reserved-names
+  - handles/wire-no-value-equality-fallback
+  - handles/wire-internal-names-no-cross-boundary
+  - handles/wire-multi-shot-reserved
+  - handles/wire-methodmetadata-direct-ask-tell
+  - handles/wire-contract-bearing
+  - handles/wire-authorised-settler-only
+  # handles introspection + area
+  - handles
+  - handles/contract-introspection
+  - handles/post-tell-ask-refactor
+  - handles/wire-__getType
+  - handles/wire-__getSchema
+  # agentspace
+  - agentspace/wire-bootstrap-handle-at-slot-0
+  - agentspace/wire-revocation-cascades
+  # kg (build-conditioned: compiled kg facility)
+  - kg/crud
+  - kg/wire-content-addressed-facts
+  - kg/wire-fact-content-addressed
+  - kg/wire-fact-sig-verify
+  - kg/wire-prototype-frozen
+  - kg/wire-restore-preserves-prototype
+  - kg/wire-kgnode-reserved-messages
+  - kg/wire-methodmetadata-direct-invocation
+  - kg/wire-methodmetadata-vs-legion-update-disjoint
+  - kg/wire-subscription-replay
+  - kg/wire-search-hook            # disposition-gated §3.3c-4
+  - kg/declarative-type-creation   # disposition-gated §3.3c-4
+  - kg/typed-handle-prototype
+  - kg/wire-query                  # V=0: named CF-V wire probe
+  # query (rides the kg facility)
+  - query/subsumption-typed
+  - query/grammar
+  - query/projection-capability
+  - query/update-atomic
+  - query/wire-successor-specification
+  # provenance (rides the kg fact store)
+  - provenance/wire-fact-provenance-fields   # V=0: named CF-V wire probe
+  - provenance/wire-freshness-modes          # V=0: named CF-V wire probe
+  - provenance/wire-identifies-relation      # disposition-gated §3.3c-5
+  # subscribe
+  - subscribe/wire-streaming
+  # ontology (build-conditioned: compiled ontology facility)
+  - ontology/subsumption
+  - ontology/wire-type-uri-resolvable
+  - ontology/wire-canonical-types-present
+  - ontology/wire-relations-resolvable
+  - ontology/wire-procedural-relations-present
+  - ontology/wire-relation-domain-range-enforced
+  - ontology/wire-entity-prototype-is-type
+  - ontology/wire-dag-except-root-selfloops
+  - ontology/wire-prototype-frozen-at-construction
+  - ontology/typehandle-singleton
+  # discovery
+  - discovery/wire-catalog
+  - discovery/catalog
+  - discovery/wire-get
+  - discovery/wire-getResource
+  - discovery/wire-bootstrap-handle-canonical-surface
+  - discovery/wire-one-resolver-slot-0
+  - discovery/no-ambient-discovery
+  # observability
+  - observability/wire-audit-log-entries
+  - observability/wire-canonical-span-names
+  - observability/wire-discipline-bundle
+  - observability/span-emission
+  - observability/audit-event-extension
+  # resources (acquisition/materialiser surface; build-conditioned)
+  - resources/materialiser
+  - resources/wire-materializer-typed
+  - resources/wire-dependency-walk
+  - resources/manifest-parser-inline
+  # local-resources (the vendored intrinsic mount + FilesystemHandle)
+  - local-resources/wire-freshness-metadata
+  - local-resources/wire-schema-declaration
+  - local-resources/wire-capability-scoped-getresource
+  - local-resources/wire-native-error-mapping
+  - local-resources/wire-resource-queryable-as-kg-entity  # rides kg
+  # federation (registry surface only; cross-org queued below)
+  - federation/peer-registry
+  - federation
+  # embodiment
+  - embodiment/wire-install-membrane
+  - embodiment/wire-one-shot-consumption
+  - embodiment/wire-single-network-endpoint
+  - embodiment/wire-direct-mount-unreachable-after-install
+  - embodiment/wire-registered-mount-forwards
+  - embodiment/wire-federated-mount-via-update
+
+# === CLAIMED (internal axis) ===
+claimed-internal:
+  - embodiment/internal-reflective-mirror
+  - agentspace/internal-single-threaded-dispatch
+  - agentspace/internal-audit-log
+  - embodiment/internal-operator-config-typed
+  - ontology/internal-bootstrap-types
+  - ontology/internal-no-parallel-subsumption-index
+  - ontology/internal-procedural-relation-subsumption
+  - kg/internal-subscription-index
+
+# === QUEUED (sliceRef named; surface CAPPED until the flip) ===
+queued:
+  # CF-L2 — TLS peer-pair lane (launchPeerPair scenarios + cross-org verbs)
+  - { facet: federation/wire-four-gate-on-resource-export, sliceRef: CF-L2 }
+  - { facet: federation/wire-orgidentity-required, sliceRef: CF-L2 }
+  - { facet: federation/wire-establishment-ceremony-required, sliceRef: CF-L2 }
+  - { facet: federation/wire-and-only-composition, sliceRef: CF-L2 }
+  - { facet: federation/wire-handoff-cert-signed-by-orgidentity, sliceRef: CF-L2 }
+  - { facet: federation/wire-handoff-verify-issuer, sliceRef: CF-L2 }
+  - { facet: federation/wire-handoff-verify-policy-version, sliceRef: CF-L2 }
+  - { facet: federation/wire-mandatory-audit-events, sliceRef: CF-L2 }
+  - { facet: federation/wire-policy-enforced-at-orgscope, sliceRef: CF-L2 }
+  - { facet: federation/wire-policy-mutual-copy, sliceRef: CF-L2 }
+  - { facet: federation/wire-two-catalogs, sliceRef: CF-L2 }
+  - { facet: federation/wire-remaining-discipline, sliceRef: CF-L2 }
+  # the matrix-abstract cross-org rows (V=0; mirror velite-cpp's queued set)
+  - { facet: federation/four-gate-refusal, sliceRef: CF-L2 }
+  - { facet: federation/cross-org-invocation, sliceRef: CF-L2 }
+  - { facet: federation/orgidentity, sliceRef: CF-L2 }
+  - { facet: federation/establishment-ceremony, sliceRef: CF-L2 }
+  - { facet: federation/cross-org-audit, sliceRef: CF-L2 }
+  - { facet: federation/policy-evaluator, sliceRef: CF-L2 }
+  - { facet: query/cross-peer-double-filter, sliceRef: CF-L2 }
+  - { facet: handles/federation, sliceRef: CF-L2,
+      note: federation-channel-driven (4 vectors) }
+  - { facet: kg/federation, sliceRef: CF-L2, note: pair-driven }
+  # CF-EXT — extended suites (QuickJS kind-host precondition unverified)
+  - { facet: components, sliceRef: CF-EXT }
+  - { facet: components/adapt, sliceRef: CF-EXT }
+  - { facet: components/reducer, sliceRef: CF-EXT }
+  - { facet: components/slot, sliceRef: CF-EXT }
+  - { facet: components/template, sliceRef: CF-EXT }
+  - { facet: components/lifecycle-engine, sliceRef: CF-EXT }
+  - { facet: components/cross-impl-property, sliceRef: CF-EXT }
+  - { facet: components/wire-handler, sliceRef: CF-EXT }
+  - { facet: template/closed-filter-set, sliceRef: CF-EXT,
+      note: routes its own top-level prefix (vectors live in components/template/) }
+  - { facet: template/closed-grammar, sliceRef: CF-EXT }
+  - { facet: search, sliceRef: CF-EXT }
+  - { facet: search/federated-fallback, sliceRef: CF-EXT }
+  - { facet: datastore/create-entity-handle, sliceRef: CF-EXT }
+  - { facet: datastore/subscription, sliceRef: CF-EXT }
+  - { facet: datastore/typed-invariants, sliceRef: CF-EXT }
+  - { facet: datastore/cascade-delete, sliceRef: CF-EXT }
+  - { facet: datastore/canonical-ontology-resolution, sliceRef: CF-EXT }
+  - { facet: datastore/agentspace-bootstrap, sliceRef: CF-EXT }
+  - { facet: datastore/wire-typed-projection, sliceRef: CF-EXT }
+  # resources store family (publish/install verbs capped; acquisition claimed)
+  - { facet: resources/publish-resolve, sliceRef: CF-EXT, note: 1 pair-driven vector }
+  - { facet: resources/pinned-hash, sliceRef: CF-EXT }
+  - { facet: resources/access-control, sliceRef: CF-EXT }
+  - { facet: resources/gc, sliceRef: CF-EXT }
+  - { facet: resources/signature-verification, sliceRef: CF-EXT }
+  - { facet: resources/peer-fallback, sliceRef: CF-EXT, note: pair-driven }
+  - { facet: resources/monorepo-resolution, sliceRef: CF-EXT }
+  - { facet: resources/node-modules-absent, sliceRef: CF-EXT }
+  - { facet: resources/native-extend-tcb-authz, sliceRef: CF-EXT }
+  - { facet: resources/internal-dependency-solver, sliceRef: CF-EXT }
+  - { facet: resources/internal-lock-snapshot, sliceRef: CF-EXT }
+  - { facet: resources/internal-materializer-registry, sliceRef: CF-EXT }
+  - { facet: resources/internal-resolver, sliceRef: CF-EXT }
+  # constraints family (only the KG-internal use-site ships v1)
+  - { facet: constraints, sliceRef: CF-EXT }
+  - { facet: constraints/slot-subsumption, sliceRef: CF-EXT }
+  - { facet: constraints/specification-operand, sliceRef: CF-EXT }
+  - { facet: constraints/subscription-filter, sliceRef: CF-EXT }
+  - { facet: constraints/wire-discipline-bundle, sliceRef: CF-EXT }
+  - { facet: constraints/wire-smt-decidability, sliceRef: CF-EXT }
+  # CF-V-mandatory queued probes (§3.3c-8 + R6-F1: ALL single-peer vectors
+  # run in the explicit named pass; all-green rows flip at CF-10, branch 2)
+  - { facet: kg/subscription, sliceRef: CF-V-mandatory,
+      note: ALL FOUR single-peer vectors run (R6-F1 option A) — cursor-replay
+        expected red (no cursor surface), the kg/persistence treatment }
+  - { facet: kg/signature-verification, sliceRef: CF-V-mandatory }
+  - { facet: kg/persistence, sliceRef: CF-V-mandatory,
+      note: expected red — fresh-per-spawn (§1.3) }
+  - { facet: query/subscribe-filter-reeval, sliceRef: CF-V-mandatory }
+
+# === NOT CLAIMED (each with its recorded ground) ===
+not-claimed:
+  # subscribe option family — no cursor/credit/session-guarantee surface
+  - { facet: subscribe/wire-with-cursor-replay, reason: option-surface-absent }
+  - { facet: subscribe/wire-credit-based-flow-control, reason: option-surface-absent }
+  - { facet: subscribe/wire-uniform-shape-across-substrates, reason: option-surface-absent }
+  - { facet: subscribe/session-guarantees, reason: option-surface-absent }
+  - { facet: subscribe/internal-cursor-persistence, reason: option-surface-absent }
+  - { facet: query/subscribe-cursor-replay, reason: option-surface-absent }
+  - { facet: query/wire-federated-decomposition, reason: option-surface-absent }
+  # freshness contract
+  - { facet: ontology/wire-types-persist-across-restart,
+      reason: fresh-per-spawn (§1.3; §3.3c-2) }
+  # verified upstream absences (§3.3c-11 shape; re-derive via classifier)
+  - { facet: sturdy-refs/wire-entity-subtype,
+      reason: "legion://types/EntitySturdyRef registered nowhere upstream" }
+  - { facet: local-resources/wire-resource-manifest-declarative-only,
+      reason: no getResourceManifest verb upstream (§3.3c-12) }
+  # federated-kg — build-excluded BY NAME (a glob never carries the exclusion)
+  - { facet: federated-kg/wire-peer-qualified-entity-uri, reason: build-excluded }
+  - { facet: federated-kg/wire-legion-resolve-entity, reason: build-excluded }
+  - { facet: federated-kg/wire-cert-rotation-stable-refs, reason: build-excluded }
+  - { facet: federated-kg/wire-same-referent-or-set, reason: build-excluded }
+  - { facet: federated-kg/wire-entity-sturdy-ref, reason: build-excluded }
+  - { facet: federated-kg/wire-cross-peer-identifies-walk, reason: build-excluded }
+  - { facet: fedkg/wire-cross-peer-discipline, reason: build-excluded }
+  # compiled-but-capped facilities (the §3.2 claims cap declines them typed;
+  # velite-cpp's own manifest claims none of them)
+  - { facet: "capability/*", reason: compiled-but-capped }
+  - { facet: host/declarative-descriptor-bootstrap, reason: compiled-but-capped }
+  - { facet: "lifecycle/*", reason: compiled-but-capped }
+  - { facet: "dataflow/*", reason: compiled-but-capped (ivm facility) }
+  - { facet: "mt/*", reason: compiled-but-capped (components facility) }
+  # v0.2+/v0.3+ session & validation families (enumerated CLOSED, R5-F2)
+  - { facet: sessions/session-lifecycle, reason: v0.14-one-shot-handshake-only }
+  - { facet: sessions/transport-contract, reason: v0.14-one-shot-handshake-only }
+  - { facet: sessions/wire-subaddress-multiparty, reason: v0.14-one-shot-handshake-only }
+  - { facet: conformance/manifest-floor, reason: negotiation-surface-absent }
+  - { facet: conformance/wire-backed-claims, reason: negotiation-surface-absent }
+  - { facet: conformance/session-negotiation-roundtrip, reason: negotiation-surface-absent }
+  - { facet: conformance/session-empty-intersection, reason: negotiation-surface-absent }
+  - { facet: conformance/session-tampered-ack, reason: negotiation-surface-absent }
+  - { facet: conformance/session-out-of-range-envelope, reason: negotiation-surface-absent }
+  - { facet: conformance/facet-not-in-session, reason: negotiation-surface-absent }
+  - { facet: conformance/intersection-canonical, reason: negotiation-surface-absent }
+  - { facet: conformance/version-out-of-range, reason: negotiation-surface-absent }
+  - { facet: conformance/deprecation-cycle-refused, reason: deprecation-surface-absent }
+  - { facet: conformance/deprecation-status-monotone, reason: deprecation-surface-absent }
+  - { facet: conformance/deprecation-removed-refused, reason: deprecation-surface-absent }
+  - { facet: conformance/deprecation-replacement-required, reason: deprecation-surface-absent }
+  - { facet: conformance/deprecation-sunset-12mo, reason: deprecation-surface-absent }
+  - { facet: conformance/area-registry, reason: registry-introspection-absent }
+  - { facet: conformance/claimed-facet-pass, reason: registry-introspection-absent }
+  - { facet: conformance/facet-dispatched-event, reason: registry-introspection-absent }
+  - { facet: conformance/facet-uri-grammar, reason: registry-introspection-absent }
+  - { facet: envelopes/wire-dedup, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-reject-unknown-fields, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-version-reject-future, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-alg-unsupported-reject, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-conformance-pass-all, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-evolution-rules, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-payload-encryption, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-resolver-authority-bounded, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-unknown-origin-reject, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/alg-field-agility, reason: envelope-validation-absent-upstream }
+  - { facet: envelopes/wire-encoding-pluralism, reason: envelope-validation-absent-upstream }
+  # misc named non-claims (§3.3c-7)
+  - { facet: handles/test-rig-installation, reason: no-test-rig-install-surface }
+  - { facet: embodiment, reason: mixed-routing (§3.3c-7) }
+  - { facet: embodiment/wire-genesis-attestation, reason: no-genesis-chain }
+  - { facet: embodiment/wire-credentials-never-leave-handle, reason: no-credential-handles-v1 }
+  - { facet: embodiment/wire-remaining, reason: remaining-bundle-not-attested }
+  - { facet: agent-embodiment/wire-remaining, reason: remaining-bundle-not-attested }
+  - { facet: bootstrap/wire-ready-attributes-minimal-peers,
+      reason: decided-by-slot-zero-vector-at-CF-V (§3.3c-7) }
+  - { facet: agentspace/internal-capability-scope, reason: no-child-space-spawn-v1 }
+  - { facet: identity/org-x509, reason: x509-surface-absent }
+  - { facet: identity/keychain, reason: keychain-surface-absent }
+  - { facet: identity/vrf, reason: vrf-surface-absent }
+  - { facet: "identity/trust-anchor/*", reason: trust-anchor-surface-absent }
+  # internal-axis non-claims (the round-6 census remainder, rowed)
+  - { facet: provenance/internal-fact-belief-justification,
+      reason: fact-store-not-belief-revision (design boundary shared with substrate) }
+  - { facet: provenance/internal-belief-revision,
+      reason: fact-store-not-belief-revision }
+  - { facet: provenance/internal-three-layer-federation,
+      reason: build-excluded + Layer3WriteWithoutIdentifies absent upstream }
+  - { facet: embodiment/internal-policy-typed,
+      reason: typed-EmbodimentPolicy-handle is upstream's named later refinement }
+
+# === OUT-OF-SCOPE (the claim model's architectural slot) ===
+out-of-scope:
+  - { facet: local-resources/wire-credential-containment,
+      reason: FileSystem realizes no credential-bearing subtype; vector runs
+        in the Step-3 named pass, banked architectural-N/A is the recorded
+        justification (§3.3c-10) }
+
+# === PER-ROW DISPOSITION EXCLUSIONS (D4's third minus-term) ===
+disposition-exclusions:
+  - facet: conduits/wire-at-least-one-declared
+    vectors-dir: conduits/v0.6
+    count: 11
+    reason: >
+      §3.3c-1 — the tree exercises optional conduit-dimension machinery (SMS
+      chunk reassembly, erasure coding, store-and-forward, bridge typology)
+      far beyond the floor obligation the URI names; the floor obligation is
+      proven by the CF-2 handshake capture. Never a silent skip: each prints
+      as its own classifier exclusion category.
+
+# === THE CLOSED NO-ROW PREFIX LIST (enumerated, no prose tail) ===
+# slashed = facet-prefix match ("<entry>/..."); bare = the exact area URI.
+no-row-prefixes:
+  prefixes:
+    - channels
+    - causality
+    - consensus
+    - overlay
+    - recovery
+    - locator
+    - cache
+    - anonymity
+    - bft
+    - cells
+    - crdt-families
+    - dht
+    - governance
+    - secrets
+    - realms
+    - limits
+    - formal-verification
+    - data-sovereignty
+    - dependency-rule
+    - interop
+    - uri
+    - snapshot
+    - revocable
+    - levels
+    - layers
+    - codebase
+    - operators
+    - abilities
+  bare:
+    - approval
+    - conversions
+    - peering
+    - durability

@@ -4,6 +4,8 @@
 
 #include "aurelian/federation/uds_register.h"
 
+#include "aurelian/federation/nav_handle_internal.h"
+
 #include <algorithm>
 #include <atomic>
 #include <memory>
@@ -320,6 +322,13 @@ class AurelianBootstrap : public Handle {
 };
 
 }  // namespace
+
+// CF-1 (nav_handle_internal.h): the ONE NavHandle implementation exported to
+// the conformance serve for the legion://chrome mount — no parallel handle.
+std::shared_ptr<Handle> MakeChromeNavHandle(const std::string& uri,
+                                            ChromeDispatchFn dispatch) {
+  return NavHandle::make(uri, std::move(dispatch));
+}
 
 struct UdsRegister::Impl {
   std::shared_ptr<velite::UdsChannel> channel;

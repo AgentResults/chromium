@@ -2,9 +2,11 @@
 
 The authored inventory `AURELIAN-GENERIC-CONTROL-DESIGN.md` section 7 demands:
 every `.cc`/`.h` file under `aurelian/handles/**` (recursive), the federation
-bring-up set (`federation/uds_register*`, `federation/wss_peer*`),
-`capability/cap_gated_cookies*`, the renderer Mojo bridge (`renderer/**`) and
-the virtual-A/V layer (`media/**`) carries exactly ONE disposition row.
+bring-up set (`federation/uds_register*`, `federation/wss_peer*`,
+`federation/nav_handle_internal*`), `capability/cap_gated_cookies*`, the
+renderer Mojo bridge (`renderer/**`), the virtual-A/V layer (`media/**`) and
+the conformance layer (`conformance/**`, CF-1) carries exactly ONE
+disposition row.
 `inventory/no_parallel_bespoke_audit.py` (a build action gating
 `aurelian_root`, like the ACM-7 audits) fails the build if (a) an in-scope
 file has no row or two rows, (b) a DELETE-row file still exists, (b2) a
@@ -62,7 +64,13 @@ neither mirrored nor part of the contract surface).
 | handles/root/wire_serialize.cc handles/root/wire_serialize.h handles/root/wire_serialize_unittest.cc | KEEP-infrastructure | THE one wire serializer (design section 3) |
 | handles/streams/subscription_producer.cc handles/streams/subscription_producer.h handles/streams/subscription_producer_unittest.cc | KEEP-infrastructure | the substrate subscription transport ACM-4 consumes (CDP event fan-out) |
 | handles/streams/mojo_stream_bridge.cc handles/streams/mojo_stream_bridge.h handles/streams/stream_subscription_browsertest.cc | KEEP-infrastructure | the renderer Mojo stream bridge (C6.b; C-MEDIA rides it) |
-| federation/uds_register.cc federation/uds_register.h federation/uds_register_unittest.cc | KEEP-infrastructure | THE one production bring-up (the C9 register-in) + the ACM-8 cap-gate seam, with its unit tests |
+| federation/uds_register.cc federation/uds_register.h federation/uds_register_unittest.cc | KEEP-infrastructure | TWO bring-up modes, ONE serve: the C9 register-in (production) and the CF-1 conformance serve consume the same NavHandle root + dispatch seam; the ACM-8 cap-gate seam, with its unit tests |
+| federation/nav_handle_internal.h | KEEP-infrastructure | CF-1: the ONE NavHandle factory seam (velite-typed, internal) — the conformance serve mounts legion://chrome through it; implementation stays in uds_register.cc, no parallel handle |
+| conformance/facet_claims.cc conformance/facet_claims.h | KEEP-infrastructure | CF-1 (design §3.2): the computed claims set — ONE source feeding the emitted __handshake manifest AND the bootstrap's claims cap, build-conditioned by the same guards as the surface |
+| conformance/aurelian-claims-draft.yaml | KEEP-infrastructure | CF-1: the drafted matrix column block as DATA (CF-V classifier Input B; becomes the embodiments.yaml column at CF-10); lockstep with facet_claims asserted at CF-V |
+| conformance/conformance_serve.cc conformance/conformance_serve.h | KEEP-infrastructure | CF-1 (design §2.1/§4.1): the conformance serve — connect-out NDJSON bring-up over the vendored bootstrap (chrome mounted, claims-capped); exit-with-the-connection in the launcher lane |
+| conformance/aurelian-conformance-peer | KEEP-infrastructure | CF-1 (design §2.4): the impl-contributed launcher — stdio↔UDS byte pump, zero protocol logic (it cannot author a frame); spawned per launchPeer() by the canonical runner |
+| conformance/conformance_serve_browsertest.cc | KEEP-test-harness | CF-1 RED/GREEN: handshake-manifest equality (manifest ≡ computed claims), ping round-trip, unclaimed-facility typed decline — the browser-side serve pins |
 | federation/wss_peer.cc federation/wss_peer.h federation/wss_peer_browsertest.cc | DELETE | the C9-era bring-up scaffold (design round-4 review N9): its only caller was its own browsertest; DELETE is the design default absent a named consumer — none was recorded. Its lazy second root already went at ACM-2w |
 | capability/cap_gated_cookies.cc capability/cap_gated_cookies.h capability/cap_gated_cookies_browsertest.cc | DELETE | the design section-7 recorded decision: the membrane's reference uses are now the ACM-8 cap_gate (every federated dispatch) and the renderer membrane; gated cookie writes ride Network.setCookie / Storage.* under the same gate |
 | renderer/aurelian_render_frame_observer.cc renderer/aurelian_render_frame_observer.h renderer/aurelian_wire_browsertest.cc | KEEP-infrastructure | the renderer-side Mojo bridge (C2/C3 infrastructure kept for C-MEDIA, design section 8) and the renderer cap-membrane consumer |

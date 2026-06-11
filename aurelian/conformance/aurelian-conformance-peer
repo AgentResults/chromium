@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+//
+// aurelian-conformance-peer — the impl-contributed launcher (conformant-
+// federation design §2.4). The canonical conformance runner spawns THIS
+// script per launchPeer() (AGENTSPACES_PEER_CMD mode, NDJSON over stdio);
+// it spawns one fresh headless browser pointed at a private UDS and pumps
+// bytes stdin↔socket↔stdout. It contains NO protocol logic — NDJSON lines
+// pass through unparsed; claim ⟺ exhibit binds the BROWSER (the launcher
+// cannot author a frame). Dependency-free node (the stdio-to-ws-adapter /
+// conformance-peer.mjs precedent).
+//
+// Responsibilities, exhaustively (design §2.4):
+//   - temp UDS path; listen; accept exactly ONE connection;
+//   - spawn the browser (AURELIAN_BROWSER env, defaulting to the fork's
+//     out/Default app) with --aurelian-conformance-serve=<path>, --headless,
+//     a fresh --user-data-dir, env forwarded (the runner's per-peer
+//     VELITE_PEER_SEED reaches the seeded bootstrap untouched);
+//   - bidirectional byte pump (browser logs go to stderr/ignore — stdout is
+//     the protocol channel, kept clean by construction);
+//   - the §2.3-07 shutdown ordering: stdin EOF → socket half-close → the
+//     browser's CLOSE{eof} crosses the still-open read side → browser exits
+//     → launcher exits. The browser is killed on every launcher exit path,
+//     and launcher death (terminate(), SIGKILL) closes the socket, which
+//     ends the browser: no orphan browsers by construction.
+
+import net from 'node:net';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+// The fork's default browser app (script lives at <src>/aurelian/conformance/).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SRC_ROOT = path.resolve(__dirname, '..', '..');
+const DEFAULT_BROWSER = path.join(
+    SRC_ROOT, 'out', 'Default', 'Chromium.app', 'Contents', 'MacOS',
+    'Chromium');
+const BROWSER = process.env.AURELIAN_BROWSER || DEFAULT_BROWSER;
+
+const sockPath = path.join(
+    os.tmpdir(), `aurelian-conf-${process.pid}-${Date.now()}.sock`);
+const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aurelian-conf-'));
+
+let child = null;
+let conn = null;
+let stdinEnded = false;
+let exiting = false;
+
+function cleanExit(code) {
+  if (exiting) return;
+  exiting = true;
+  try { if (child && child.exitCode === null) child.kill('SIGKILL'); } catch {}
+  try { fs.unlinkSync(sockPath); } catch {}
+  try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+  process.exit(code);
+}
+
+const server = net.createServer((socket) => {
+  // Exactly ONE connection — the browser's connect-out.
+  server.close();
+  conn = socket;
+
+  // socket -> stdout (NDJSON lines pass through unparsed).
+  socket.on('data', (buf) => process.stdout.write(buf));
+
+  // stdin -> socket. If stdin already ended before the connect (a very
+  // short-lived driver), half-close immediately.
+  process.stdin.on('data', (buf) => socket.write(buf));
+  if (stdinEnded) socket.end();
+
+  // The browser closed its side (it exits with the connection): we are done
+  // once the wire is fully closed.
+  socket.on('close', () => cleanExit(0));
+  socket.on('error', () => cleanExit(0));
+});
+
+server.on('error', (e) => {
+  process.stderr.write(`aurelian-conformance-peer: listen failed: ${e}\n`);
+  cleanExit(1);
+});
+
+server.listen(sockPath, () => {
+  child = spawn(
+      BROWSER,
+      [
+        `--aurelian-conformance-serve=${sockPath}`,
+        '--headless',
+        '--no-first-run',
+        // No startup window: the conformance peer is wire-driven; a window
+        // mid-creation holds a kBrowserWindow keep-alive that races (and
+        // loses to) the exit-on-disconnect path — found at CF-1. Targets,
+        // when a scenario needs them, are minted through the mirror.
+        '--no-startup-window',
+        `--user-data-dir=${userDataDir}`,
+      ],
+      {
+        env: process.env,  // the runner's VELITE_PEER_SEED et al., untouched
+        stdio: ['ignore', 'ignore', 'ignore'],  // stdout stays protocol-clean
+      });
+  child.on('exit', () => {
+    // Browser gone: if it never connected, that is a launch failure; if it
+    // connected, the socket close path finishes the shutdown ordering.
+    if (!conn) cleanExit(1);
+  });
+  child.on('error', (e) => {
+    process.stderr.write(`aurelian-conformance-peer: spawn failed: ${e}\n`);
+    cleanExit(1);
+  });
+});
+
+// Driver-side lifecycle (design §2.3-07): close() = stdin EOF → half-close
+// the UDS write side; the browser sees recv EOF, emits CLOSE{"eof"} (which
+// crosses the still-open read side and is flushed to stdout above), and
+// exits; the socket close then ends this process.
+process.stdin.on('end', () => {
+  stdinEnded = true;
+  if (conn) conn.end();
+});
+process.stdin.on('error', () => {
+  stdinEnded = true;
+  if (conn) conn.end();
+});
+process.stdin.resume();
+
+process.on('exit', () => {
+  try { if (child && child.exitCode === null) child.kill('SIGKILL'); } catch {}
+});

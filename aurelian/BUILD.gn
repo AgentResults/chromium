@@ -28,15 +28,28 @@ if (enable_aurelian) {
     "$_velite_src/envelopes/include",
     "$_velite_src/fact-log/include",
     "$_velite_src/fact-substrate/include",
+    "$_velite_src/federated-kg/include",
     "$_velite_src/forth/include",
     "$_velite_src/forth-handle/include",
     "$_velite_src/handle/include",
     "$_velite_src/host/include",
     "$_velite_src/identity/include",
     "$_velite_src/json/include",
+    # kg/ontology/search/datastore/cells: present so __has_include guards
+    # (facet_claims.cc, the vendored bootstrap's facility self-configuration)
+    # evaluate IDENTICALLY to //velite's compile of the same tree — the
+    # design §3.2 same-guards invariant. CF-1 found the drift: without
+    # kg/include here the manifest dropped the kg rows while the surface
+    # compiled them.
+    "$_velite_src/kg/include",
     "$_velite_src/lattices/include",
+    "$_velite_src/cells/include",
+    "$_velite_src/datastore/include",
+    "$_velite_src/ontology/include",
     "$_velite_src/origin-sequence/include",
+    "$_velite_src/overlay/include",
     "$_velite_src/resources/include",
+    "$_velite_src/search/include",
     "$_velite_src/substrate/include",
     "$_velite_src/crypto/vendor",
     "$_velite_src/mt/runtime/include",
@@ -395,6 +408,7 @@ if (enable_aurelian) {
   # test does not drag in aurelian_root / chrome-browser handles).
   source_set("aurelian_uds_register") {
     sources = [
+      "federation/nav_handle_internal.h",
       "federation/uds_register.cc",
       "federation/uds_register.h",
     ]
@@ -661,6 +675,7 @@ if (enable_aurelian) {
       ":aurelian_bridge_dispatch",
       ":aurelian_cap_anchor_provisioner",
       ":aurelian_completion_bridge",
+      ":aurelian_conformance_serve",
       ":aurelian_embodiment_policy",
       ":aurelian_install",
       ":aurelian_root",
@@ -671,6 +686,52 @@ if (enable_aurelian) {
       "//chrome/browser:main_extra_parts",
       "//chrome/browser/ui",
       "//content/public/browser",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # CF-1 — the computed claims set (the conformant-federation design §3.2):
+  # ONE source feeding the emitted __handshake manifest AND the bootstrap's
+  # claims cap. Compiled with the velite include path so its __has_include
+  # build-conditioning evaluates identically to the vendored bootstrap's
+  # facility self-configuration.
+  source_set("aurelian_conformance_claims") {
+    sources = [
+      "conformance/facet_claims.cc",
+      "conformance/facet_claims.h",
+    ]
+
+    deps = [ "//base" ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
+  # CF-1 — the conformance serve mode (design §2.1/§4.1): the canonical-
+  # runner bring-up. Connects out to the launcher's UDS, serves the vendored
+  # bootstrap (chrome mounted, claims-capped) over raw NDJSON lines, emits
+  # the computed __handshake. Velite-typed internally; pimpl-hidden header.
+  source_set("aurelian_conformance_serve") {
+    sources = [
+      "conformance/conformance_serve.cc",
+      "conformance/conformance_serve.h",
+    ]
+
+    deps = [
+      ":aurelian_conformance_claims",
+      ":aurelian_uds_register",
+      "//base",
       "//velite",
     ]
 
@@ -951,6 +1012,7 @@ if (enable_aurelian) {
       "bootstrap/boot_register_browsertest.cc",
       "capability/cap_membrane_browsertest.cc",
       "catalog/session_context_browsertest.cc",
+      "conformance/conformance_serve_browsertest.cc",
       "federation/one_root_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
@@ -979,6 +1041,7 @@ if (enable_aurelian) {
       ":aurelian_targets_mirror",
       ":aurelian_capability",
       ":aurelian_completion_bridge",
+      ":aurelian_conformance_claims",
       ":aurelian_wire_serialize",
       ":aurelian_devtools",
       ":aurelian_embodiment_policy",

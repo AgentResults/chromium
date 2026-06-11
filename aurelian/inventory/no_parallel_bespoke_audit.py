@@ -7,10 +7,11 @@
 
 The mirror REPLACED the bespoke surface; this GRC-14-style lock keeps it
 replaced. Scope: every .cc/.h under aurelian/handles/** (recursive), the
-federation bring-up set (federation/uds_register*, federation/wss_peer*),
-capability/cap_gated_cookies*, plus the renderer Mojo bridge (renderer/**)
-and the virtual-A/V layer (media/**) — the two KEEP families round-6 made
-the lock enforce like every other row.
+federation bring-up set (federation/uds_register*, federation/wss_peer*,
+federation/nav_handle_internal*), capability/cap_gated_cookies*, the
+renderer Mojo bridge (renderer/**), the virtual-A/V layer (media/**) — the
+two KEEP families round-6 made the lock enforce like every other row — and
+the conformance layer (conformance/**, CF-1).
 
 Fails the build when:
   (a) an in-scope file exists with no inventory row (or with two rows);
@@ -35,11 +36,14 @@ import sys
 # The audited extensions: control surface is carried by C++ sources.
 EXTS = {".cc", ".h"}
 
-# Recursive scope directories (aurelian/-relative).
-SCOPE_DIRS = ("handles", "renderer", "media")
+# Recursive scope directories (aurelian/-relative). "conformance" joined at
+# CF-1 (the conformant-federation design section 8: new surface joins the
+# inventory; the audit's scope clause extends to aurelian/conformance/**).
+SCOPE_DIRS = ("handles", "renderer", "media", "conformance")
 
 # Prefix-glob scope (aurelian/-relative).
 SCOPE_PREFIXES = (
+    "federation/nav_handle_internal",
     "federation/uds_register",
     "federation/wss_peer",
     "capability/cap_gated_cookies",
@@ -58,13 +62,25 @@ DISPOSITIONS = {
 VERB_EXEMPT = {"describe"}
 
 
+def in_territory(rel: str) -> bool:
+    """Territory membership, extension-blind — what clause (d) accepts.
+
+    CF-1 widened the row set: the conformance layer carries non-C++ surface
+    (the launcher script, the claims-draft data file) that the design
+    mandates rows for. Clause (a)'s ENUMERATION stays C++-only (in_scope);
+    a row may additionally name any in-territory file.
+    """
+    p = pathlib.PurePosixPath(rel)
+    if p.parts and p.parts[0] in SCOPE_DIRS:
+        return True
+    return any(rel.startswith(prefix) for prefix in SCOPE_PREFIXES)
+
+
 def in_scope(rel: str) -> bool:
     p = pathlib.PurePosixPath(rel)
     if p.suffix not in EXTS:
         return False
-    if p.parts and p.parts[0] in SCOPE_DIRS:
-        return True
-    return any(rel.startswith(prefix) for prefix in SCOPE_PREFIXES)
+    return in_territory(rel)
 
 
 def enumerate_scope(aurelian_root: pathlib.Path):
@@ -153,7 +169,7 @@ def main():
             if rel in claimed:
                 failures.append(f"DUPLICATE ROW: {rel}")
             claimed[rel] = disposition
-            if not in_scope(rel):
+            if not in_territory(rel):
                 failures.append(
                     f"ROW OUTSIDE AUDIT SCOPE (d): {rel} — audit scope must "
                     "equal inventory scope")

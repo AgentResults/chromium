@@ -13,6 +13,7 @@
 #include <string>
 
 #include "aurelian/capability/cap_anchor_provisioner.h"
+#include "aurelian/conformance/conformance_serve.h"
 #include "aurelian/federation/bridge_dispatch.h"
 #include "aurelian/federation/completion_bridge.h"
 #include "aurelian/federation/uds_register.h"
@@ -21,9 +22,12 @@
 #include "aurelian/media/aurelian_virtual_mic.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/membrane/install.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
@@ -100,6 +104,12 @@ struct BrowserMainExtraImpl : public BrowserListObserver,
   // C9 — the machine-federation register-in (dials Agrippa's UDS, registers the
   // `chrome` facet; no inbound port). Stopped on teardown (dtor → Stop()).
   std::unique_ptr<UdsRegister> uds_register;
+  // CF-1 — the conformance serve (dials the launcher's UDS under
+  // --aurelian-conformance-serve; the canonical-runner bring-up). One wire
+  // bring-up per process: this INSTEAD of the register-in when the switch
+  // is present (the serve emits the __handshake manifest instead of the
+  // Agrippa register ask, design §2.1). Stopped on teardown (dtor → Stop()).
+  std::unique_ptr<ConformanceServe> conformance_serve;
   // C-MEDIA-2c — the avatar virtual camera, registered with the video capture
   // service at boot and pumping frames live from MediaSeam (which Cicero's
   // video_sink fills). Destroyed on teardown (drops the device pipes).
@@ -244,6 +254,34 @@ void BrowserMainExtra::PostCreateThreads() {
   //    created on the serve thread pre-post, the posted UI task starts the
   //    dispatch and returns, and the serve thread waits on the record —
   //    Stop()-coverable, typed timeout, no UI-thread block.
+  //    CF-1: under --aurelian-conformance-serve=<uds> the canonical-runner
+  //    bring-up replaces the register-in for this process — the serve
+  //    connects out to the launcher's UDS, mounts legion://chrome on the
+  //    vendored bootstrap, and emits the COMPUTED __handshake manifest
+  //    instead of the Agrippa register ask (design §2.1). Still no inbound
+  //    listener in either mode.
+  const base::CommandLine* command_line =
+      base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(kConformanceServeSwitch)) {
+    impl_->conformance_serve = std::make_unique<ConformanceServe>();
+    const std::string serve_sock =
+        command_line->GetSwitchValueASCII(kConformanceServeSwitch);
+    const bool served = impl_->conformance_serve->Start(
+        serve_sock, InstalledChromeDispatch(),
+        // Launcher lane: the connection IS the browser lifetime (design
+        // §2.3-07). CloseBrowserSoon is the canonical programmatic-close
+        // entry (the CDP Browser.close path): it releases the DevTools
+        // keep-alive THEN ExitIgnoreUnloadHandlers — found at CF-1 that
+        // a bare AttemptExit/ExitIgnoreUnloadHandlers leaves a headless
+        // browser held open by that keep-alive. Posts to the UI thread
+        // itself, so it is callable from the serve thread.
+        base::BindOnce(&ChromeDevToolsManagerDelegate::CloseBrowserSoon));
+    LOG(WARNING) << "[aurelian] conformance serve "
+                 << (served ? "connected + handshake emitted over"
+                            : "FAILED to connect")
+                 << " " << serve_sock;
+    return;
+  }
   impl_->uds_register = std::make_unique<UdsRegister>();
   const std::string sock = ResolveAgrippaSock();
   // ACM-8: the federation seam shares the SAME operator anchor the renderer
