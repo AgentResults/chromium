@@ -70,45 +70,6 @@ if (enable_aurelian) {
     ]
   }
 
-  # Accessibility tree snapshot (C7.a). No RTTI (plain content/ui APIs).
-  source_set("aurelian_a11y") {
-    sources = [
-      "handles/browser/accessibility_handle.cc",
-      "handles/browser/accessibility_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-      "//ui/accessibility",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Windows list (C1.y). No RTTI.
-  source_set("aurelian_windows") {
-    sources = [
-      "handles/browser/windows_handle.cc",
-      "handles/browser/windows_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//chrome/browser/ui:ui",
-      "//chrome/browser/ui/tabs:tab_strip",
-      "//ui/gfx/geometry",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # Tabstrip open / close / activate (C1.x). No RTTI.
   source_set("aurelian_tabstrip") {
     sources = [
@@ -484,233 +445,6 @@ if (enable_aurelian) {
     ]
   }
 
-  # Tab groups group / query / ungroup (C13.c). No RTTI.
-  source_set("aurelian_tabgroups") {
-    sources = [
-      "handles/browser/tabgroups_handle.cc",
-      "handles/browser/tabgroups_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//chrome/browser/ui/tabs:tab_strip",
-      "//components/tab_groups",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Page content info: MIME + encoding (C11.c). No RTTI.
-  source_set("aurelian_page_info") {
-    sources = [
-      "handles/browser/page_info_handle.cc",
-      "handles/browser/page_info_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Profile info: incognito state + identity (C13.d). No RTTI.
-  source_set("aurelian_profile") {
-    sources = [
-      "handles/browser/profile_handle.cc",
-      "handles/browser/profile_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Browsing history query (C13.e). No RTTI.
-  source_set("aurelian_history") {
-    sources = [
-      "handles/browser/history_handle.cc",
-      "handles/browser/history_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//components/history/core/browser",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Frame tree listing (C2.x). No RTTI.
-  source_set("aurelian_frames") {
-    sources = [
-      "handles/browser/frames_handle.cc",
-      "handles/browser/frames_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Navigation history list (C1.z). No RTTI.
-  source_set("aurelian_nav_history") {
-    sources = [
-      "handles/browser/nav_history_handle.cc",
-      "handles/browser/nav_history_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Per-tab process info (C12.a). No RTTI.
-  source_set("aurelian_process") {
-    sources = [
-      "handles/browser/process_handle.cc",
-      "handles/browser/process_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Clipboard read / write text (C13.b). No RTTI.
-  source_set("aurelian_clipboard") {
-    sources = [
-      "handles/browser/clipboard_handle.cc",
-      "handles/browser/clipboard_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//ui/base/clipboard",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Bookmarks add / list / remove (C13.a). No RTTI.
-  source_set("aurelian_bookmarks") {
-    sources = [
-      "handles/browser/bookmarks_handle.cc",
-      "handles/browser/bookmarks_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//components/bookmarks/browser",
-      "//components/bookmarks/common",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # JS dialogs: respond to a pending dialog (C11.b). No RTTI.
-  source_set("aurelian_dialogs") {
-    sources = [
-      "handles/browser/dialogs_handle.cc",
-      "handles/browser/dialogs_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//components/javascript_dialogs",
-      "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Emulation: user-agent override (C11.a). No RTTI.
-  source_set("aurelian_emulation") {
-    sources = [
-      "handles/browser/emulation_handle.cc",
-      "handles/browser/emulation_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-      "//third_party/blink/public/common",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Extensions list / enable / disable (C7.b). No RTTI.
-  source_set("aurelian_extensions") {
-    sources = [
-      "handles/browser/extensions_handle.cc",
-      "handles/browser/extensions_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//content/public/browser",
-      "//extensions/browser",
-      "//extensions/common",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # DevTools CDP-compat command surface (C7.d). No RTTI.
   source_set("aurelian_devtools") {
     sources = [
@@ -721,26 +455,6 @@ if (enable_aurelian) {
     deps = [
       "//base",
       "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
-  # Permissions query / grant / revoke via content settings (C7.c). No RTTI.
-  source_set("aurelian_permissions") {
-    sources = [
-      "handles/browser/permissions_handle.cc",
-      "handles/browser/permissions_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//components/content_settings/core/browser",
-      "//components/content_settings/core/common",
-      "//url",
     ]
 
     configs -= [
@@ -1436,27 +1150,14 @@ if (enable_aurelian) {
       "catalog/session_context_browsertest.cc",
       "federation/one_root_browsertest.cc",
       "federation/wss_peer_browsertest.cc",
-      "handles/browser/accessibility_handle_browsertest.cc",
-      "handles/browser/bookmarks_handle_browsertest.cc",
-      "handles/browser/clipboard_handle_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/audio_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
-      "handles/browser/dialogs_handle_browsertest.cc",
-      "handles/browser/emulation_handle_browsertest.cc",
-      "handles/browser/extensions_handle_browsertest.cc",
       "handles/browser/find_handle_browsertest.cc",
-      "handles/browser/permissions_handle_browsertest.cc",
-      "handles/browser/process_handle_browsertest.cc",
       "handles/browser/frame_handle_browsertest.cc",
-      "handles/browser/frames_handle_browsertest.cc",
-      "handles/browser/history_handle_browsertest.cc",
       "handles/browser/input_handle_browsertest.cc",
-      "handles/browser/nav_history_handle_browsertest.cc",
-      "handles/browser/page_info_handle_browsertest.cc",
       "handles/browser/gpu_handle_browsertest.cc",
       "handles/browser/print_handle_browsertest.cc",
-      "handles/browser/profile_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
       "handles/root/tab_reach_browsertest.cc",
       "membrane/install_browsertest.cc",
@@ -1469,9 +1170,7 @@ if (enable_aurelian) {
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
       "handles/browser/tab_handle_browsertest.cc",
-      "handles/browser/tabgroups_handle_browsertest.cc",
       "handles/browser/tabstrip_handle_browsertest.cc",
-      "handles/browser/windows_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
       "handles/network/network_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
@@ -1483,42 +1182,27 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian",
-      ":aurelian_a11y",
       ":aurelian_audio",
-      ":aurelian_bookmarks",
       ":aurelian_cap_browser",
       ":aurelian_catalog",
       ":aurelian_cdp_mirror",
       ":aurelian_cdp_session",
       ":aurelian_targets_mirror",
-      ":aurelian_clipboard",
       ":aurelian_capability",
       ":aurelian_completion_bridge",
       ":aurelian_wire_serialize",
       ":aurelian_devtools",
-      ":aurelian_dialogs",
-      ":aurelian_emulation",
-      ":aurelian_extensions",
       ":aurelian_federation",
-      ":aurelian_frames",
       ":aurelian_handles",
-      ":aurelian_history",
-      ":aurelian_nav_history",
       ":aurelian_network",
-      ":aurelian_page_info",
-      ":aurelian_permissions",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
       ":aurelian_install",
-      ":aurelian_process",
-      ":aurelian_profile",
       ":aurelian_root",
       ":aurelian_streams",
       ":aurelian_system",
-      ":aurelian_tabgroups",
       ":aurelian_tabstrip",
       ":aurelian_virtual_camera",
-      ":aurelian_windows",
       "//aurelian/public/mojom",
       "//base",
       "//base/test:test_support",
@@ -1528,24 +1212,16 @@ if (enable_aurelian) {
       "//media/capture:capture_switches",
       "//chrome/test:browser_tests_runner",
       "//chrome/test:test_support",
-      "//components/bookmarks/browser",
-      "//components/bookmarks/test",
-      "//components/content_settings/core/browser",
       "//components/download/public/common:public",
-      "//components/history/core/browser",
-      "//components/history/core/test",
       "//components/keyed_service/content",
       "//components/keyed_service/core",
       "//content/public/browser",
       "//content/test:test_support",
-      "//extensions/browser",
-      "//extensions/common",
       "//mojo/public/cpp/bindings",
       "//net",
       "//net:test_support",
       "//testing/gtest",
       "//third_party/blink/public/common",
-      "//ui/base/clipboard:clipboard_test_support",
       "//url",
       "//velite",
     ]

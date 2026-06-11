@@ -181,4 +181,4 @@ correspondence:
     reason: telemetry observation, not browser control; volume (tens of thousands of histograms) without verbs makes it catalog noise in v1
   extensions-registry:
     status: out-of-scope
-    reason: extensions surface rides the bespoke extensions_handle pending its section-7 ACM-R disposition; revisit when that row is decided
+    reason: the bespoke extensions_handle was DELETED at ACM-R (operations territory is the chrome-layer Extensions.* domain); the registry itself stays unprojected in v1 — CDP Extensions.* covers operations, not reflective enumeration — revisit per roll

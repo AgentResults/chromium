@@ -43,4 +43,4 @@ Regenerate: `python3 aurelian/ontology/surface_coverage_audit.py --src-root . --
 | mojo-interface-broker | out-of-scope | — | the broker binds typed mojo pipes, not a reflective catalog; no schema-carrying enumeration surface exists to project in v1 |
 | command-line-switches | out-of-scope | — | process-launch-frozen key/value strings; read-only after boot and untyped — no live control surface to mirror in v1 |
 | histograms-registry | out-of-scope | — | telemetry observation, not browser control; volume (tens of thousands of histograms) without verbs makes it catalog noise in v1 |
-| extensions-registry | out-of-scope | — | extensions surface rides the bespoke extensions_handle pending its section-7 ACM-R disposition; revisit when that row is decided |
+| extensions-registry | out-of-scope | — | the bespoke extensions_handle was DELETED at ACM-R (operations territory is the chrome-layer Extensions.* domain); the registry itself stays unprojected in v1 — CDP Extensions.* covers operations, not reflective enumeration — revisit per roll |
