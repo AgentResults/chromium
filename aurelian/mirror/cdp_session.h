@@ -31,6 +31,10 @@ class Value;
 
 namespace aurelian {
 
+// One persistent session on one target (defined in the .cc; named here so
+// the registry's lazy-attach helpers can be members).
+class CdpSession;
+
 class CdpSessionRegistry {
  public:
   // The one instance (UI-confined; design section 3 residency rule).
@@ -64,6 +68,25 @@ class CdpSessionRegistry {
   // close path — never run mid-callback).
   void PruneClosedTargetSessions();
 
+  // ACM-4: subscribe `sink` to the CDP event `event_method`
+  // ("Domain.event") on the browser-target / one target's persistent
+  // session — a CDP event subscription IS a handle subscription (design
+  // section 3): returns the substrate SubscriptionHandle; every matching
+  // protocol event reaches the sink as a `legion-notify` tell carrying
+  // {event, params}. Lazy attach like invoke; the domain's `enable`
+  // command (when the descriptor carries one) is dispatched on the first
+  // subscription per domain — data-driven, no per-domain code.
+  // `uri_prefix` (the event node's URI) mints subscription ids.
+  std::shared_ptr<velite::agentspaces::Handle> SubscribeOnBrowserTarget(
+      const std::string& event_method,
+      std::shared_ptr<velite::agentspaces::Handle> sink,
+      const std::string& uri_prefix);
+  std::shared_ptr<velite::agentspaces::Handle> SubscribeOnTarget(
+      const std::string& target_id,
+      const std::string& event_method,
+      std::shared_ptr<velite::agentspaces::Handle> sink,
+      const std::string& uri_prefix);
+
   // The lazy-attach observables (plan ACM-2: the first invoke attaches the
   // browser session; one persistent session carries concurrent commands).
   size_t SessionCountForTesting() const;
@@ -78,6 +101,11 @@ class CdpSessionRegistry {
 
   CdpSessionRegistry();
   ~CdpSessionRegistry();
+
+  // The shared lazy-attach halves (invoke and subscribe ride the same
+  // persistent sessions). Null on attach failure. UI thread.
+  CdpSession* EnsureBrowserSession();
+  CdpSession* EnsureTargetSession(const std::string& target_id);
 
   struct Impl;  // hides the content:: client from this header
   std::unique_ptr<Impl> impl_;

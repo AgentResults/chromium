@@ -12,8 +12,13 @@
 
 #include "aurelian/handles/browser/devtools_handle.h"
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/handles/root/wire_serialize.h"
+#include "aurelian/mirror/cdp_mirror.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -26,6 +31,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "velite/agentspaces-wire/handle.hpp"
+#include "velite/agentspaces-wire/value_handle.hpp"
 
 namespace aurelian {
 
@@ -37,6 +43,44 @@ namespace {
     return answer->state_kind() != velite::agentspaces::StateKind::Pending;
   });
 }
+
+// The substrate sink (ACM-4): records every `legion-notify` frame.
+class RecordingSink : public velite::agentspaces::Handle {
+ public:
+  velite::agentspaces::StateKind state_kind() const override {
+    return velite::agentspaces::StateKind::ResolvedValue;
+  }
+  const velite::agentspaces::Value& resolved_value() const override {
+    return identity_;
+  }
+  std::shared_ptr<velite::agentspaces::Handle> resolved_handle()
+      const override {
+    return nullptr;
+  }
+  std::string_view broken_reason() const override { return ""; }
+  std::string sturdy_identity() const override { return "test://sink"; }
+
+  std::shared_ptr<velite::agentspaces::Handle> ask_impl(
+      std::string_view,
+      const velite::agentspaces::Value&) override {
+    return velite::agentspaces::ValueHandle::make_broken("unknown-message");
+  }
+
+  void tell(std::string_view msg,
+            const velite::agentspaces::Value& frame) override {
+    if (msg == "legion-notify") {
+      frames_.push_back(frame);
+    }
+  }
+
+  const std::vector<velite::agentspaces::Value>& frames() const {
+    return frames_;
+  }
+
+ private:
+  std::vector<velite::agentspaces::Value> frames_;
+  velite::agentspaces::Value identity_{std::string("test://sink")};
+};
 
 }  // namespace
 
@@ -75,18 +119,52 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CdpCompatCommand) {
   DestroyChromeRoot(root);
 }
 
+// (ACM-4 TEST-CHANGE) The event pin migrates off the CaptureCdpEvent
+// one-shot — deleted in the same commit, its last caller — onto the
+// subscribe surface: same observable (a Runtime.consoleAPICalled event
+// carrying the logged text), now via subscribe({sink}) on the per-target
+// sub-mirror with the domain auto-enabled and the action invoked through
+// the same session layer.
 IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CapturesCdpEvent) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL("data:text/html,<title>evt</title>")));
+  std::string id = ActivePageTargetId();
 
-  // Enable Runtime, evaluate a console.log, capture the consoleAPICalled event.
-  std::string evt = CaptureCdpEvent(
-      GetWC(), "Runtime.enable", "Runtime.evaluate",
-      "{\"expression\":\"console.log('cdp-evt-42')\"}",
-      "Runtime.consoleAPICalled");
+  auto sink = std::make_shared<RecordingSink>();
+  std::shared_ptr<velite::agentspaces::Handle> event_node =
+      CreateCdpMirrorForTarget(id, "page")
+          ->ask("Runtime", velite::agentspaces::Value())
+          ->ask("consoleAPICalled", velite::agentspaces::Value());
+  ASSERT_NE(event_node->state_kind(), velite::agentspaces::StateKind::Broken)
+      << event_node->broken_reason();
+  std::shared_ptr<velite::agentspaces::Handle> sub = event_node->ask(
+      "subscribe", velite::agentspaces::Value::make_object(
+                       {{"sink", velite::agentspaces::Value(sink)}}));
+  ASSERT_NE(sub->state_kind(), velite::agentspaces::StateKind::Broken)
+      << sub->broken_reason();
 
-  EXPECT_NE(evt.find("consoleAPICalled"), std::string::npos) << evt;
-  EXPECT_NE(evt.find("cdp-evt-42"), std::string::npos) << evt;
+  ChromeRoot* root = CreateChromeRoot();
+  ASSERT_NE(root, nullptr);
+  DispatchOutcome outcome = RootDispatch(
+      root, "targets/" + id + "/cdp/Runtime/evaluate/invoke",
+      "{\"expression\":\"console.log('cdp-evt-42')\"}");
+  ASSERT_EQ(outcome.kind, DispatchOutcome::Kind::kPending) << outcome.reply;
+  ASSERT_TRUE(WaitUntilSettled(outcome.answer));
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !sink->frames().empty(); }))
+      << "consoleAPICalled never arrived";
+  bool saw_logged_text = false;
+  for (const velite::agentspaces::Value& frame : sink->frames()) {
+    const velite::agentspaces::Value* event = frame.object_get("event");
+    ASSERT_NE(event, nullptr);
+    EXPECT_EQ(event->as_string(), "Runtime.consoleAPICalled");
+    if (SerializeWireReply(velite::agentspaces::ValueHandle::make(frame))
+            .find("cdp-evt-42") != std::string::npos) {
+      saw_logged_text = true;
+    }
+  }
+  EXPECT_TRUE(saw_logged_text) << "no frame carried the logged text";
+  DestroyChromeRoot(root);
 }
 
 // ACM-S1 (precondition pin) — a navigation driven ENTIRELY through the

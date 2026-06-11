@@ -6,10 +6,13 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
+#include "aurelian/catalog/cdp_catalog.h"
 #include "aurelian/federation/completion_bridge.h"
+#include "aurelian/handles/streams/subscription_producer.h"
 #include "aurelian/mirror/cdp_agent_client.h"
 #include "aurelian/mirror/value_convert.h"
 #include "base/check.h"
@@ -77,10 +80,14 @@ class PendingCdpAnswer : public Handle {
   std::string reason_;
 };
 
+}  // namespace
+
 // ONE persistent session on one target: a long-lived client (the no-RTTI
 // content glue, cdp_agent_client) with monotonic request ids and an
 // id-keyed in-flight correlation map (design section 3 — the replacement
-// for the attach-wait-detach single-id one-shot). UI-confined.
+// for the attach-wait-detach single-id one-shot). UI-confined. Named (not
+// file-local) so the registry's lazy-attach helpers can be members; the
+// definition lives only in this TU.
 //
 // The protocol send is POSTED, not inline (worklog ACM-2): the fork's
 // browser-session host delivers the client callback ON THE DISPATCH STACK
@@ -143,6 +150,31 @@ class CdpSession {
     return answer;
   }
 
+  // ACM-4: subscribe `sink` to `event_method` on THIS session. The fan-out
+  // transport is the substrate SubscriptionProducer (the section-7 KEEP
+  // row this slice consumes): one producer per event method, broadcasting
+  // every matching protocol event as a `legion-notify` frame. The domain's
+  // `enable` command is dispatched on the first subscription per domain
+  // when the descriptor carries one — catalog-driven, no per-domain code.
+  std::shared_ptr<Handle> Subscribe(const std::string& event_method,
+                                    std::shared_ptr<Handle> sink,
+                                    const std::string& uri_prefix) {
+    const size_t dot = event_method.find('.');
+    const std::string domain = event_method.substr(0, dot);
+    if (enabled_domains_.insert(domain).second &&
+        CdpCatalog::Get().FindCommand(domain, "enable")) {
+      // Fire-and-forget on this session; the answer settles like any
+      // command's, with no waiter attached.
+      Invoke(domain + ".enable", Value());
+    }
+    std::unique_ptr<SubscriptionProducer>& producer =
+        producers_[event_method];
+    if (!producer) {
+      producer = std::make_unique<SubscriptionProducer>();
+    }
+    return producer->Subscribe(std::move(sink), uri_prefix, std::string());
+  }
+
  private:
   // The posted send (UI thread, the turn after the invoke). A session torn
   // down in between already settled its in-flight entries Broken.
@@ -162,7 +194,22 @@ class CdpSession {
     }
     std::optional<int> id = reply->FindInt("id");
     if (!id) {
-      // A CDP event — the subscribe fan-out is ACM-4's slice.
+      // A CDP event (id-less): fan out to this session's subscribers as a
+      // substrate subscription frame {event, params} (ACM-4). Events with
+      // no producer are dropped — nothing subscribed.
+      const std::string* method = reply->FindString("method");
+      if (!method) {
+        return;
+      }
+      auto producer_it = producers_.find(*method);
+      if (producer_it == producers_.end()) {
+        return;
+      }
+      const base::DictValue* params = reply->FindDict("params");
+      producer_it->second->Broadcast(Value::make_object({
+          {"event", Value(*method)},
+          {"params", params ? FromBaseDict(*params) : Value()},
+      }));
       return;
     }
     auto it = in_flight_.find(*id);
@@ -203,11 +250,13 @@ class CdpSession {
   std::unique_ptr<CdpAgentClient> client_;
   int next_id_ = 1;
   std::map<int, std::shared_ptr<PendingCdpAnswer>> in_flight_;
+  // ACM-4: per-event-method fan-out + the domains already enabled on this
+  // session (the auto-enable is once per domain per session).
+  std::map<std::string, std::unique_ptr<SubscriptionProducer>> producers_;
+  std::set<std::string> enabled_domains_;
   base::OnceClosure on_closed_external_;
   base::WeakPtrFactory<CdpSession> weak_factory_{this};
 };
-
-}  // namespace
 
 struct CdpSessionRegistry::Impl {
   // The persistent browser-target session — lazily attached on the first
@@ -227,31 +276,29 @@ CdpSessionRegistry& CdpSessionRegistry::Get() {
 CdpSessionRegistry::CdpSessionRegistry() : impl_(std::make_unique<Impl>()) {}
 CdpSessionRegistry::~CdpSessionRegistry() = default;
 
-std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnBrowserTarget(
-    const std::string& method,
-    const Value& params) {
+// The shared lazy-attach halves (invoke and subscribe ride the same
+// persistent sessions). Null on attach failure.
+CdpSession* CdpSessionRegistry::EnsureBrowserSession() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!impl_->browser_session || !impl_->browser_session->attached()) {
     auto session = std::make_unique<CdpSession>();
     if (!session->AttachToBrowserTarget()) {
-      return ValueHandle::make_broken("cdp-attach-failed");
+      return nullptr;
     }
     impl_->browser_session = std::move(session);
   }
-  return impl_->browser_session->Invoke(method, params);
+  return impl_->browser_session.get();
 }
 
-std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnTarget(
-    const std::string& target_id,
-    const std::string& method,
-    const Value& params) {
+CdpSession* CdpSessionRegistry::EnsureTargetSession(
+    const std::string& target_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   auto it = impl_->target_sessions.find(target_id);
   if (it == impl_->target_sessions.end() || !it->second->attached()) {
     auto session = std::make_unique<CdpSession>();
     if (!session->AttachToTarget(target_id)) {
-      // A stale id (the target closed) is a typed attach failure.
-      return ValueHandle::make_broken("cdp-attach-failed:no-such-target");
+      // A stale id (the target closed) is a clean attach failure.
+      return nullptr;
     }
     // Detach-on-target-close (design section 3): OnClosed settles the
     // in-flight entries Broken synchronously, then this posts the prune —
@@ -266,7 +313,51 @@ std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnTarget(
                                                  std::move(session))
              .first;
   }
-  return it->second->Invoke(method, params);
+  return it->second.get();
+}
+
+std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnBrowserTarget(
+    const std::string& method,
+    const Value& params) {
+  CdpSession* session = EnsureBrowserSession();
+  if (!session) {
+    return ValueHandle::make_broken("cdp-attach-failed");
+  }
+  return session->Invoke(method, params);
+}
+
+std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnTarget(
+    const std::string& target_id,
+    const std::string& method,
+    const Value& params) {
+  CdpSession* session = EnsureTargetSession(target_id);
+  if (!session) {
+    return ValueHandle::make_broken("cdp-attach-failed:no-such-target");
+  }
+  return session->Invoke(method, params);
+}
+
+std::shared_ptr<Handle> CdpSessionRegistry::SubscribeOnBrowserTarget(
+    const std::string& event_method,
+    std::shared_ptr<Handle> sink,
+    const std::string& uri_prefix) {
+  CdpSession* session = EnsureBrowserSession();
+  if (!session) {
+    return ValueHandle::make_broken("cdp-attach-failed");
+  }
+  return session->Subscribe(event_method, std::move(sink), uri_prefix);
+}
+
+std::shared_ptr<Handle> CdpSessionRegistry::SubscribeOnTarget(
+    const std::string& target_id,
+    const std::string& event_method,
+    std::shared_ptr<Handle> sink,
+    const std::string& uri_prefix) {
+  CdpSession* session = EnsureTargetSession(target_id);
+  if (!session) {
+    return ValueHandle::make_broken("cdp-attach-failed:no-such-target");
+  }
+  return session->Subscribe(event_method, std::move(sink), uri_prefix);
 }
 
 void CdpSessionRegistry::PruneClosedTargetSessions() {

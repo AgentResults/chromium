@@ -20,21 +20,17 @@ namespace aurelian {
 // `params_json` is the CDP params object (default "{}"). Synchronous: attaches
 // a transient client, spins a RunLoop until the response arrives (or a timeout),
 // then detaches. UI thread.
+//
+// SURVIVES the HS-1 replacement as the RAW-SESSION LIVE-PIN HARNESS ONLY
+// (ACM-3/4 note for the section-7 inventory): its remaining callers are the
+// ACM-S2 session-context live pins, which arbitrate the derived table
+// against the host WITHOUT the mirror in the loop — by design they cannot
+// migrate onto the mirror. No production surface uses it. The CaptureCdpEvent
+// one-shot was deleted at ACM-4 when its last caller migrated onto the
+// subscribe surface.
 std::string SendCdpCommand(content::WebContents* wc,
                            const std::string& method,
                            const std::string& params_json = "{}");
-
-// Sends `enable_method` then `action_method`(`action_params`), and returns the
-// first received CDP EVENT message whose text contains `event_method` (events
-// have no request id). Returns "{"error":...}" on failure/timeout. Useful for
-// capturing protocol events (e.g. Runtime.consoleAPICalled) rather than
-// command responses.
-std::string CaptureCdpEvent(content::WebContents* wc,
-                            const std::string& enable_method,
-                            const std::string& action_method,
-                            const std::string& action_params,
-                            const std::string& event_method,
-                            int timeout_ms = 10000);
 
 }  // namespace aurelian
 

@@ -91,6 +91,13 @@ class CdpMirrorNode : public Handle {
     if (msg == "invoke" && kind_ == Kind::kCommand) {
       return Invoke(spec);
     }
+    // ACM-4: subscribe({sink}) on an event node — a CDP event subscription
+    // IS a handle subscription (design section 3), behind the SAME
+    // session-context gate as invoke (design section 2 round-4: never
+    // accepted-but-silently-event-less).
+    if (msg == "subscribe" && kind_ == Kind::kEvent) {
+      return Subscribe(spec);
+    }
     // Reserved / unwrap probes never fall through to catalog lookup.
     if (!msg.empty() && msg.front() == '_') {
       return ValueHandle::make_broken("unknown-message");
@@ -256,6 +263,43 @@ class CdpMirrorNode : public Handle {
     }
     return CdpSessionRegistry::Get().InvokeOnTarget(scope_.target_id, method,
                                                     spec);
+  }
+
+  // ACM-4: the subscription half of the session-context rule (design
+  // section 2 round-4) — the same gate shape as Invoke, both directions
+  // typed redirects naming the correct path (a page-scoped event at the
+  // browser mirror; a derived-browser-only event at a page sub-mirror);
+  // non-page sub-mirrors pass through. Command-level overrides are
+  // command-granular and do not apply to events.
+  std::shared_ptr<Handle> Subscribe(const Value& spec) const {
+    const Value* sink = spec.object_get("sink");
+    if (!sink || !sink->is_handle() || !sink->as_handle()) {
+      return ValueHandle::make_broken("subscribe-needs-sink");
+    }
+    const CdpCatalog& cat = CdpCatalog::Get();
+    const std::string event_method = domain_ + "." + member_;
+    if (scope_.target_id.empty()) {
+      std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
+      if (!row.has_value() || !row->in_browser_union) {
+        return ValueHandle::make_broken(
+            "session-context: " + event_method +
+            " is not in the browser session's closed union; use "
+            "targets/<id>/cdp/" +
+            domain_ + "/" + member_);
+      }
+      return CdpSessionRegistry::Get().SubscribeOnBrowserTarget(
+          event_method, sink->as_handle(), uri());
+    }
+    if (IsPageOrFrameType(scope_.target_type)) {
+      std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
+      if (row.has_value() && row->browser_only) {
+        return ValueHandle::make_broken(
+            "session-context: " + event_method + " is browser-only; use cdp/" +
+            domain_ + "/" + member_);
+      }
+    }
+    return CdpSessionRegistry::Get().SubscribeOnTarget(
+        scope_.target_id, event_method, sink->as_handle(), uri());
   }
 
   // Catalog-lookup navigation. Misses answer TYPED reasons; nodes are
