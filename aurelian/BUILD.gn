@@ -43,33 +43,6 @@ if (enable_aurelian) {
     "$_velite_src/mt/compiler/include",
   ]
 
-  # Velite handle code — compiled with RTTI (Velite uses dynamic_cast).
-  # Network intercept + cookie handles (no RTTI — used by chrome/browser).
-  source_set("aurelian_network") {
-    sources = [
-      "handles/network/network_handle.cc",
-      "handles/network/network_handle.h",
-    ]
-
-    deps = [
-      "//base",
-      "//components/download/public/common:public",
-      "//content/public/browser",
-      "//mojo/public/cpp/bindings",
-      "//mojo/public/cpp/system",
-      "//net",
-      "//services/network/public/cpp",
-      "//services/network/public/mojom",
-      "//third_party/blink/public/common",
-      "//url",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # Tabstrip open / close / activate (C1.x). No RTTI.
   source_set("aurelian_tabstrip") {
     sources = [
@@ -636,27 +609,6 @@ if (enable_aurelian) {
     ]
   }
 
-  # Cap-gated browser ops (C8.g): the browser membrane guards a real Chromium
-  # subsystem call. No RTTI; bridges the cap layer + the network handle.
-  source_set("aurelian_cap_browser") {
-    sources = [
-      "capability/cap_gated_cookies.cc",
-      "capability/cap_gated_cookies.h",
-    ]
-
-    deps = [
-      ":aurelian_capability",
-      ":aurelian_network",
-      "//base",
-      "//content/public/browser",
-    ]
-
-    configs -= [
-      "//build/config/clang:find_bad_constructs",
-      "//build/config/clang:unsafe_buffers",
-    ]
-  }
-
   # Subscription stream producer (C6). No RTTI (no dynamic_cast here; uses
   # Velite's SubscriptionHandle, whose typeinfo is provided by //velite).
   source_set("aurelian_streams") {
@@ -1145,7 +1097,6 @@ if (enable_aurelian) {
   test("aurelian_browsertests") {
     sources = [
       "bootstrap/boot_register_browsertest.cc",
-      "capability/cap_gated_cookies_browsertest.cc",
       "capability/cap_membrane_browsertest.cc",
       "catalog/session_context_browsertest.cc",
       "federation/one_root_browsertest.cc",
@@ -1172,7 +1123,6 @@ if (enable_aurelian) {
       "handles/browser/tab_handle_browsertest.cc",
       "handles/browser/tabstrip_handle_browsertest.cc",
       "handles/browser/zoom_handle_browsertest.cc",
-      "handles/network/network_handle_browsertest.cc",
       "handles/streams/stream_subscription_browsertest.cc",
       "media/aurelian_virtual_camera_browsertest.cc",
       "renderer/aurelian_wire_browsertest.cc",
@@ -1183,7 +1133,6 @@ if (enable_aurelian) {
     deps = [
       ":aurelian",
       ":aurelian_audio",
-      ":aurelian_cap_browser",
       ":aurelian_catalog",
       ":aurelian_cdp_mirror",
       ":aurelian_cdp_session",
@@ -1194,7 +1143,6 @@ if (enable_aurelian) {
       ":aurelian_devtools",
       ":aurelian_federation",
       ":aurelian_handles",
-      ":aurelian_network",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
       ":aurelian_install",
@@ -1212,7 +1160,6 @@ if (enable_aurelian) {
       "//media/capture:capture_switches",
       "//chrome/test:browser_tests_runner",
       "//chrome/test:test_support",
-      "//components/download/public/common:public",
       "//components/keyed_service/content",
       "//components/keyed_service/core",
       "//content/public/browser",

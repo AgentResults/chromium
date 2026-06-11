@@ -4,8 +4,6 @@
 
 #include "chrome/browser/chrome_content_browser_client.h"
 
-#include "aurelian/handles/network/network_handle.h"
-
 #include <algorithm>
 #include <iterator>
 #include <map>
@@ -5953,9 +5951,6 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   std::vector<std::unique_ptr<blink::URLLoaderThrottle>> result;
-
-  // Aurelian: intercept rules (default pass-through, no rules = no effect).
-  result.push_back(aurelian::CreateAurelianThrottle());
 
   DCHECK(browser_context);
   Profile* profile = Profile::FromBrowserContext(browser_context);
