@@ -305,6 +305,36 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
+  # ACM-5: the prefs mirror — the live profile's PrefService registry
+  # projected (names/types/defaults are the host's). RTTI (Velite handles);
+  # profile reach via BrowserList + the component-layer user_prefs
+  # association (no profile-monolith dependency).
+  source_set("aurelian_prefs_mirror") {
+    sources = [
+      "mirror/prefs_mirror.cc",
+      "mirror/prefs_mirror.h",
+    ]
+
+    deps = [
+      ":aurelian_cdp_session",  # value_convert (the one converter pair)
+      "//base",
+      "//chrome/browser/ui",
+      "//components/prefs",
+      "//components/user_prefs",
+      "//content/public/browser",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # Navigable legion://chrome/ root handle (reachable-from-root). RTTI (Velite).
   source_set("aurelian_root") {
     sources = [
@@ -314,6 +344,7 @@ if (enable_aurelian) {
 
     deps = [
       ":aurelian_cdp_mirror",
+      ":aurelian_prefs_mirror",
       ":aurelian_targets_mirror",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
@@ -1274,6 +1305,7 @@ if (enable_aurelian) {
       "mirror/cdp_event_subscribe_browsertest.cc",
       "mirror/cdp_mirror_browsertest.cc",
       "mirror/cdp_session_browsertest.cc",
+      "mirror/prefs_mirror_browsertest.cc",
       "mirror/targets_mirror_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",

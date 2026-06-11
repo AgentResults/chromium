@@ -19,6 +19,7 @@
 #include "aurelian/handles/media/media_seam.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/mirror/cdp_mirror.h"
+#include "aurelian/mirror/prefs_mirror.h"
 #include "aurelian/mirror/targets_mirror.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -235,6 +236,11 @@ class ChromeRootHandle : public Handle {
     if (policy_.Allows("targets")) {
       targets_ = CreateTargetsMirror();
     }
+    // ACM-5: the prefs mirror (stateless projection over the live
+    // profile's PrefService; persistent per the same residency pattern).
+    if (policy_.Allows("prefs")) {
+      prefs_ = CreatePrefsMirror();
+    }
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -278,6 +284,12 @@ class ChromeRootHandle : public Handle {
       }
       return targets_;
     }
+    if (name == "prefs") {
+      if (!policy_.Allows("prefs") || !prefs_) {
+        return ValueHandle::make_broken("out-of-scope");
+      }
+      return prefs_;
+    }
     if (name == "system" || name == "tabs" || name == "gpu") {
       if (!policy_.Allows(name)) {
         return ValueHandle::make_broken("out-of-scope");
@@ -315,6 +327,9 @@ class ChromeRootHandle : public Handle {
   // Persistent targets mirror (legion://chrome/targets), or null when
   // unsealed (ACM-3).
   std::shared_ptr<Handle> targets_;
+  // Persistent prefs mirror (legion://chrome/prefs), or null when
+  // unsealed (ACM-5).
+  std::shared_ptr<Handle> prefs_;
 };
 
 // Serializes a settled handle's reply to the federation-wire string form. The

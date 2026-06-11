@@ -4,7 +4,9 @@
 
 #include "aurelian/mirror/value_convert.h"
 
+#include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -49,6 +51,53 @@ Value FromBaseValue(const base::Value& v) {
       return Value();
   }
   return Value();
+}
+
+std::optional<base::Value> ToBaseValue(const Value& v) {
+  if (v.is_null()) {
+    return base::Value();
+  }
+  if (v.is_bool()) {
+    return base::Value(v.as_bool());
+  }
+  if (v.is_int()) {
+    const int64_t i = v.as_int();
+    if (i >= std::numeric_limits<int>::min() &&
+        i <= std::numeric_limits<int>::max()) {
+      return base::Value(static_cast<int>(i));
+    }
+    return base::Value(static_cast<double>(i));  // the JSON convention
+  }
+  if (v.is_double()) {
+    return base::Value(v.as_double());
+  }
+  if (v.is_string()) {
+    return base::Value(v.as_string());
+  }
+  if (v.is_array()) {
+    base::ListValue list;
+    for (const Value& item : v.as_array()) {
+      std::optional<base::Value> converted = ToBaseValue(item);
+      if (!converted) {
+        return std::nullopt;
+      }
+      list.Append(std::move(*converted));
+    }
+    return base::Value(std::move(list));
+  }
+  if (v.is_object()) {
+    base::DictValue dict;
+    for (const auto& [key, field] : v.as_object()) {
+      std::optional<base::Value> converted = ToBaseValue(field);
+      if (!converted) {
+        return std::nullopt;
+      }
+      dict.Set(key, std::move(*converted));
+    }
+    return base::Value(std::move(dict));
+  }
+  // handle / slot-ref / bytes: value-only seam — the caller refuses typed.
+  return std::nullopt;
 }
 
 }  // namespace aurelian
