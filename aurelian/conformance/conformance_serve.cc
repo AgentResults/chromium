@@ -100,11 +100,19 @@ struct ConformanceServe::Impl {
         if (!frame.empty()) {
           disp->on_inbound(frame);
         }
+        // [PROTOCOL-SESSION-TERMINATION-EQUALS-CLOSE] (scenario 07): the
+        // moment a session-scoped CLOSE dispatches, NOTHING more is pumped
+        // or emitted — the force-break of pending answer slots is LOCAL on
+        // both sides; a post-CLOSE __reject on the wire is forbidden. The
+        // run_ndjson_session discipline (its loop never pumps post-close).
+        if (disp->closed()) {
+          break;
+        }
+      }
+      if (disp->closed()) {
+        break;  // inbound session CLOSE — wind down silently (scenario 07)
       }
       disp->pump_pending_answers();
-      if (disp->closed()) {
-        break;  // inbound session CLOSE — wind down (scenario 07)
-      }
     }
     // The connection ended while Stop() has not flipped: launcher-lane
     // semantics (design §2.3-07) — emit CLOSE{eof} if the session is still
