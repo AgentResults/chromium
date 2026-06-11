@@ -32,10 +32,15 @@ std::shared_ptr<velite::agentspaces::Handle> MakeChromeNavHandle(
 // CF-4: the ONE slot-0 wrapper (AurelianSlotZero, uds_register.cc — design
 // §4.2): the unified vendored bootstrap composed with the dispatchAt FOLD
 // facade + chrome-subtree navigation. Both bring-up modes serve THIS.
+// CF-5: `wire_subscribe` + `mailbox` route legion-subscribe-remote for
+// chrome event-node URIs through the mirror (design §5.2); empty = the
+// typed wire-eventing-unavailable decline.
 std::shared_ptr<velite::agentspaces::Handle> MakeUnifiedSlotZero(
     std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
     ChromeDispatchFn dispatch,
-    const std::vector<uint8_t>& cap_anchor);
+    const std::vector<uint8_t>& cap_anchor,
+    ChromeWireSubscribeFn wire_subscribe = {},
+    WireEventMailbox* mailbox = nullptr);
 
 }  // namespace aurelian
 

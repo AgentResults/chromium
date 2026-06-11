@@ -36,10 +36,14 @@ enum class ServeDrain {
 // channel — wire hygiene: a closed dispatcher still needs its transport
 // read so a refused oversize body keeps discarding instead of wedging the
 // sender). False on Stop(). Never pumps after a session-scoped CLOSE.
+// `flush` (optional) runs after the pump while the session is open — the
+// CF-5 wire-event mailbox drain rides here (emission stays single-threaded
+// on the serve thread, the ONE dispatcher emission path).
 inline bool RunServeLoop(const std::atomic<bool>& stop,
                          velite::agentspaces::wire::Dispatcher& disp,
                          const std::function<ServeDrain()>& drain,
-                         const std::function<void()>& idle) {
+                         const std::function<void()>& idle,
+                         const std::function<void()>& flush = {}) {
   while (!stop.load()) {
     const ServeDrain d = drain();
     if (d == ServeDrain::kEnded) {
@@ -47,6 +51,9 @@ inline bool RunServeLoop(const std::atomic<bool>& stop,
     }
     if (!disp.closed()) {
       disp.pump_pending_answers();
+      if (flush) {
+        flush();
+      }
     }
     if (d == ServeDrain::kIdle) {
       idle();

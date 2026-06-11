@@ -17,6 +17,8 @@
 #include "aurelian/federation/bridge_dispatch.h"
 #include "aurelian/federation/completion_bridge.h"
 #include "aurelian/federation/uds_register.h"
+#include "aurelian/federation/wire_event_mailbox.h"
+#include "aurelian/mirror/cdp_session.h"
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/media/aurelian_virtual_camera.h"
 #include "aurelian/media/aurelian_virtual_mic.h"
@@ -138,6 +140,87 @@ std::string ResolveAurelianPeerSeed() {
 ChromeRoot* g_installed_root = nullptr;
 
 }  // namespace
+
+// CF-5 (design §5.2): the ONE wire-subscribe seam over the mirror registry,
+// constructed once — both wire bring-ups consume it. Called on a serve
+// thread: parses the chrome event-node URI, posts the CdpSessionRegistry
+// registration to the UI thread (the HS-1 posted-task pattern; the
+// producer-side WireSinkHandle is constructed THERE — designation never
+// crosses a serialized seam, the sub_id relay is the binding), and settles
+// the ack through the blocking HS-1 record (one-in-flight until CF-6).
+ChromeWireSubscribeFn InstalledWireSubscribe() {
+  static const base::NoDestructor<ChromeWireSubscribeFn> subscribe(
+      [](const std::string& uri, const std::string& sub_id,
+         WireEventMailbox* mailbox) -> std::string {
+        // Parse: legion://chrome/cdp/<Domain>/events/<event>  (browser) or
+        //        legion://chrome/targets/<id>/cdp/<D>/events/<e> (target).
+        constexpr char kPrefix[] = "legion://chrome/";
+        if (uri.rfind(kPrefix, 0) != 0) {
+          return "broken:event-uri-malformed:" + uri;
+        }
+        std::string rel = uri.substr(sizeof(kPrefix) - 1);
+        std::string target_id;
+        if (rel.rfind("targets/", 0) == 0) {
+          rel = rel.substr(8);
+          const size_t slash = rel.find('/');
+          if (slash == std::string::npos) {
+            return "broken:event-uri-malformed:" + uri;
+          }
+          target_id = rel.substr(0, slash);
+          rel = rel.substr(slash + 1);
+        }
+        // rel must now be cdp/<Domain>/events/<event>.
+        if (rel.rfind("cdp/", 0) != 0) {
+          return "broken:event-uri-malformed:" + uri;
+        }
+        rel = rel.substr(4);
+        const size_t d_slash = rel.find('/');
+        if (d_slash == std::string::npos ||
+            rel.compare(d_slash + 1, 7, "events/") != 0) {
+          return "broken:event-uri-malformed:" + uri;
+        }
+        const std::string domain = rel.substr(0, d_slash);
+        const std::string event = rel.substr(d_slash + 1 + 7);
+        if (domain.empty() || event.empty()) {
+          return "broken:event-uri-malformed:" + uri;
+        }
+        const std::string event_method = domain + "." + event;
+
+        auto record = CompletionBridge::Get().CreateRecord();
+        content::GetUIThreadTaskRunner({})->PostTask(
+            FROM_HERE,
+            base::BindOnce(
+                [](std::string uri, std::string sub_id,
+                   WireEventMailbox* mailbox, std::string target_id,
+                   std::string event_method,
+                   std::shared_ptr<CompletionRecord> record) {
+                  auto sink = WireSinkHandle::make(sub_id, mailbox);
+                  std::shared_ptr<velite::agentspaces::Handle> sub =
+                      target_id.empty()
+                          ? CdpSessionRegistry::Get().SubscribeOnBrowserTarget(
+                                event_method, sink, uri)
+                          : CdpSessionRegistry::Get().SubscribeOnTarget(
+                                target_id, event_method, sink, uri);
+                  if (!sub ||
+                      sub->state_kind() ==
+                          velite::agentspaces::StateKind::Broken) {
+                    CompletionBridge::Get().Complete(
+                        record,
+                        "broken:" +
+                            std::string(sub ? sub->broken_reason()
+                                            : "subscribe-failed"));
+                    return;
+                  }
+                  // Overflow can now cancel the producer side (design §5.2).
+                  sink->set_subscription(sub);
+                  CompletionBridge::Get().Complete(record,
+                                                   "subscribed:" + sub_id);
+                },
+                uri, sub_id, mailbox, target_id, event_method, record));
+        return CompletionBridge::Get().Wait(record, base::Seconds(10));
+      });
+  return *subscribe;
+}
 
 // HS-3/ACM-2w (design section 5): the ONE ChromeDispatchFn over the
 // INSTALLED root, constructed once — both wire bring-ups consume it; the
@@ -339,7 +422,9 @@ void BrowserMainExtra::PostCreateThreads() {
         // a bare AttemptExit/ExitIgnoreUnloadHandlers leaves a headless
         // browser held open by that keep-alive. Posts to the UI thread
         // itself, so it is callable from the serve thread.
-        base::BindOnce(&ChromeDevToolsManagerDelegate::CloseBrowserSoon));
+        base::BindOnce(&ChromeDevToolsManagerDelegate::CloseBrowserSoon),
+        // CF-5: the SAME wire-subscribe seam on both wires (one surface).
+        InstalledWireSubscribe());
     LOG(WARNING) << "[aurelian] conformance serve "
                  << (served ? "connected + handshake emitted over"
                             : "FAILED to connect")
@@ -354,7 +439,9 @@ void BrowserMainExtra::PostCreateThreads() {
   // (the seed → seeded Ed25519 destHash), replacing the old literal.
   const bool dialed = impl_->uds_register->Start(
       sock, "chrome", ResolveAurelianPeerSeed(), InstalledChromeDispatch(),
-      impl_->cap_anchor);
+      impl_->cap_anchor,
+      // CF-5: the wire-subscribe seam (chrome event nodes → the mirror).
+      InstalledWireSubscribe());
   LOG(WARNING) << "[aurelian] machine-hub register "
                << (dialed ? "dialed + registered facet chrome over"
                           : "no hub at")

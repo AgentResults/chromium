@@ -58,10 +58,13 @@ class ConformanceServe {
   // connection lifetime in conformance mode"); under the browsertest
   // harness the fixture holds the connection and Stop() flips first, so it
   // never runs. Returns true iff connected and the handshake was emitted.
+  // `wire_subscribe` (CF-5, optional): the wire-subscribe seam — the SAME
+  // surface on both wires; empty = the typed unavailable decline.
   bool Start(const std::string& socket_path,
              ChromeDispatchFn dispatch,
              const std::vector<uint8_t>& cap_anchor,
-             base::OnceClosure on_disconnect);
+             base::OnceClosure on_disconnect,
+             ChromeWireSubscribeFn wire_subscribe = {});
 
   // Harness-owned shutdown: flip stopping, join the serve thread, close.
   // The serve never initiates browser exit after Stop().

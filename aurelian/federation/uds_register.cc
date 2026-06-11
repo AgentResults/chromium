@@ -8,6 +8,7 @@
 #include "aurelian/conformance/unified_bootstrap.h"
 #include "aurelian/federation/nav_handle_internal.h"
 #include "aurelian/federation/serve_pump.h"
+#include "aurelian/federation/wire_event_mailbox.h"
 
 #include <algorithm>
 #include <atomic>
@@ -240,9 +241,12 @@ class AurelianSlotZero : public Handle {
   static std::shared_ptr<AurelianSlotZero> make(
       std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
       ChromeDispatchFn dispatch,
-      const std::vector<uint8_t>& cap_anchor) {
+      const std::vector<uint8_t>& cap_anchor,
+      ChromeWireSubscribeFn wire_subscribe = {},
+      WireEventMailbox* mailbox = nullptr) {
     return std::shared_ptr<AurelianSlotZero>(new AurelianSlotZero(
-        std::move(vendored), std::move(dispatch), cap_anchor));
+        std::move(vendored), std::move(dispatch), cap_anchor,
+        std::move(wire_subscribe), mailbox));
   }
 
   velite::agentspaces::StateKind state_kind() const override {
@@ -304,6 +308,33 @@ class AurelianSlotZero : public Handle {
                     : std::string("broken:no-dispatch");
       return ValueHandle::make(Value(std::move(reply)));
     }
+    if (msg == "legion-subscribe-remote") {
+      // CF-5 (design §5.2/§5.4): a chrome event-node URI routes through the
+      // mirror's subscribe surface via the installed wire-subscribe seam —
+      // the producer-side WireSinkHandle is constructed there (the sub_id
+      // relay; no designation in the spec), the registration posts to the
+      // UI thread, and events come back through the mailbox the serve
+      // loop drains. Non-chrome URIs keep the vendored KG path untouched.
+      const Value* uv = spec.is_object() ? spec.object_get("uri") : nullptr;
+      const Value* sid = spec.is_object() ? spec.object_get("sub_id") : nullptr;
+      if (uv && uv->is_string() &&
+          uv->as_string().compare(0, sizeof(kChromeUriPrefix) - 1,
+                                  kChromeUriPrefix) == 0) {
+        if (!sid || !sid->is_string()) {
+          return ValueHandle::make_broken("legion://errors/InvalidArgument");
+        }
+        if (!wire_subscribe_ || !mailbox_) {
+          return ValueHandle::make_broken("wire-eventing-unavailable");
+        }
+        std::string reply =
+            wire_subscribe_(uv->as_string(), sid->as_string(), mailbox_);
+        if (reply.rfind("broken:", 0) == 0) {
+          return ValueHandle::make_broken(reply);
+        }
+        return ValueHandle::make(Value(std::move(reply)));
+      }
+      return vendored_->ask(msg, spec);
+    }
     if (msg == "getResource") {
       // Chrome-subtree navigation resolves THROUGH the mount: a relative or
       // chrome-prefixed uri mints the navigable child (slot-exported).
@@ -333,8 +364,13 @@ class AurelianSlotZero : public Handle {
   AurelianSlotZero(
       std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
       ChromeDispatchFn dispatch,
-      const std::vector<uint8_t>& cap_anchor)
-      : vendored_(std::move(vendored)), dispatch_(std::move(dispatch)) {
+      const std::vector<uint8_t>& cap_anchor,
+      ChromeWireSubscribeFn wire_subscribe,
+      WireEventMailbox* mailbox)
+      : vendored_(std::move(vendored)),
+        dispatch_(std::move(dispatch)),
+        wire_subscribe_(std::move(wire_subscribe)),
+        mailbox_(mailbox) {
     if (cap_anchor.size() == anchor_.size()) {
       std::copy(cap_anchor.begin(), cap_anchor.end(), anchor_.begin());
       has_anchor_ = true;
@@ -343,6 +379,8 @@ class AurelianSlotZero : public Handle {
 
   std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored_;
   ChromeDispatchFn dispatch_;
+  ChromeWireSubscribeFn wire_subscribe_;
+  WireEventMailbox* mailbox_ = nullptr;
   // ACM-8: the operator cap trust anchor (the SAME anchor the renderer
   // membranes are provisioned with). No anchor → presented caps fail closed.
   PubKey anchor_{};
@@ -363,9 +401,12 @@ std::shared_ptr<Handle> MakeChromeNavHandle(const std::string& uri,
 std::shared_ptr<Handle> MakeUnifiedSlotZero(
     std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
     ChromeDispatchFn dispatch,
-    const std::vector<uint8_t>& cap_anchor) {
+    const std::vector<uint8_t>& cap_anchor,
+    ChromeWireSubscribeFn wire_subscribe,
+    WireEventMailbox* mailbox) {
   return AurelianSlotZero::make(std::move(vendored), std::move(dispatch),
-                                cap_anchor);
+                                cap_anchor, std::move(wire_subscribe),
+                                mailbox);
 }
 
 struct UdsRegister::Impl {
@@ -375,6 +416,9 @@ struct UdsRegister::Impl {
   std::atomic<bool> stop{false};
   std::atomic<bool> connected{false};
   std::string dest_hash;
+  // CF-5: the wire-event mailbox — UI-thread producers (WireSinkHandle),
+  // serve-thread drain (the flush hook below).
+  WireEventMailbox mailbox;
 
   // The ONE serve loop (serve_pump.h, design §4.1) over the envelope-framed
   // channel drain. The register-in stays RESIDENT across session close
@@ -415,7 +459,17 @@ struct UdsRegister::Impl {
           }
           return did ? ServeDrain::kProgress : ServeDrain::kIdle;
         },
-        []() { base::PlatformThread::Sleep(base::Milliseconds(2)); });
+        []() { base::PlatformThread::Sleep(base::Milliseconds(2)); },
+        // CF-5: drain the wire-event mailbox beside the pending pump — the
+        // ONE dispatcher emission path, serve-thread confined (design §5.2;
+        // the frame is byte-identical to SubSinkHandle::tell's by
+        // construction: same verb, same payload shape, same emit_tell).
+        [this]() {
+          for (Value& entry : mailbox.DrainAll()) {
+            disp->emit_tell(0, std::string("legion-subscription-event"),
+                            std::move(entry));
+          }
+        });
   }
 };
 
@@ -429,7 +483,8 @@ bool UdsRegister::Start(const std::string& socket_path,
                         const std::string& facet,
                         const std::string& peer_seed,
                         ChromeDispatchFn dispatch,
-                        const std::vector<uint8_t>& cap_anchor) {
+                        const std::vector<uint8_t>& cap_anchor,
+                        ChromeWireSubscribeFn wire_subscribe) {
   impl_->channel = std::make_shared<velite::UdsChannel>();
   if (!impl_->channel->connect(socket_path.c_str())) {
     impl_->channel.reset();
@@ -443,7 +498,8 @@ bool UdsRegister::Start(const std::string& socket_path,
       peer_seed, NavHandle::make(kChromeUriPrefix, dispatch));
   velite::UdsChannel* raw = impl_->channel.get();
   impl_->disp = std::make_shared<Dispatcher>(
-      AurelianSlotZero::make(vendored, std::move(dispatch), cap_anchor),
+      AurelianSlotZero::make(vendored, std::move(dispatch), cap_anchor,
+                             std::move(wire_subscribe), &impl_->mailbox),
       [raw](const std::string& frame) {
         raw->send(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
       });

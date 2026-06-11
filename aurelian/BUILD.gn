@@ -406,6 +406,29 @@ if (enable_aurelian) {
   # Agrippa over the local UDS, AURELIAN-DESIGN §3.6/§13). ChromeRoot-free: the
   # caller injects the ChromeDispatchFn, so this links //velite only (the unit
   # test does not drag in aurelian_root / chrome-browser handles).
+  # CF-5 — the wire-event thread bridge (design §5.2): the mutex-guarded
+  # mailbox (UI producers → serve-thread drain) + the producer-constructed
+  # WireSinkHandle. Velite-typed; mirror-free (the registration seam is
+  # installed at boot, closing over the mirror registry).
+  source_set("aurelian_wire_event") {
+    sources = [
+      "federation/wire_event_mailbox.cc",
+      "federation/wire_event_mailbox.h",
+    ]
+
+    deps = [
+      "//base",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+  }
+
   source_set("aurelian_uds_register") {
     sources = [
       "federation/nav_handle_internal.h",
@@ -420,6 +443,8 @@ if (enable_aurelian) {
       # CF-4: the unified slot-0 construction + the computed manifest.
       ":aurelian_conformance_claims",
       ":aurelian_unified_bootstrap",
+      # CF-5: the wire-event mailbox the serve loop drains.
+      ":aurelian_wire_event",
       "//base",
       "//velite",
     ]
@@ -678,9 +703,11 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_bridge_dispatch",
       ":aurelian_cap_anchor_provisioner",
+      ":aurelian_cdp_session",
       ":aurelian_completion_bridge",
       ":aurelian_conformance_serve",
       ":aurelian_embodiment_policy",
+      ":aurelian_wire_event",
       ":aurelian_install",
       ":aurelian_root",
       ":aurelian_uds_register",
@@ -1043,6 +1070,7 @@ if (enable_aurelian) {
       "catalog/session_context_browsertest.cc",
       "conformance/conformance_serve_browsertest.cc",
       "federation/one_root_browsertest.cc",
+      "federation/wire_event_browsertest.cc",
       "handles/profile/audio_capture_handle_browsertest.cc",
       "handles/browser/devtools_handle_browsertest.cc",
       "handles/root/root_handle_browsertest.cc",
@@ -1071,6 +1099,7 @@ if (enable_aurelian) {
       ":aurelian_capability",
       ":aurelian_completion_bridge",
       ":aurelian_conformance_claims",
+      ":aurelian_wire_event",
       ":aurelian_wire_serialize",
       ":aurelian_devtools",
       ":aurelian_embodiment_policy",

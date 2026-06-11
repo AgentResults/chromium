@@ -171,11 +171,20 @@ class CdpSession {
                                     const std::string& uri_prefix) {
     const size_t dot = event_method.find('.');
     const std::string domain = event_method.substr(0, dot);
-    if (enabled_domains_.insert(domain).second &&
-        CdpCatalog::Get().FindCommand(domain, "enable")) {
-      // Fire-and-forget on this session; the answer settles like any
-      // command's, with no waiter attached.
-      Invoke(domain + ".enable", Value());
+    if (enabled_domains_.insert(domain).second) {
+      if (CdpCatalog::Get().FindCommand(domain, "enable")) {
+        // Fire-and-forget on this session; the answer settles like any
+        // command's, with no waiter attached.
+        Invoke(domain + ".enable", Value());
+      } else if (CdpCatalog::Get().FindCommand(domain, "setDiscoverTargets")) {
+        // CF-5: a domain whose event flow is gated on discovery rather than
+        // a plain `enable` (the Target domain shape — targetCreated/
+        // targetDestroyed only flow after setDiscoverTargets{discover:true}).
+        // Still catalog-driven: keyed on the descriptor carrying the
+        // command, never on a domain-name literal.
+        Invoke(domain + ".setDiscoverTargets",
+               Value::make_object({{"discover", Value(true)}}));
+      }
     }
     std::unique_ptr<SubscriptionProducer>& producer =
         producers_[event_method];

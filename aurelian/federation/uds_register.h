@@ -39,6 +39,21 @@ namespace aurelian {
 using ChromeDispatchFn = std::function<std::string(
     const std::string& path, const std::string& serialized_spec)>;
 
+// CF-5 — the wire-subscribe registration seam (design §5.2): called on the
+// serve thread for a `legion-subscribe-remote` naming a chrome event-node
+// URI; the installed implementation constructs the producer-side
+// WireSinkHandle (designation never crosses a serialized seam — the sub_id
+// relay, design §5.4), posts the CdpSessionRegistry registration to the UI
+// thread (the HS-1 posted-task pattern), and returns the serialized ack
+// ("subscribed:<sub_id>" / "broken:…") through the blocking HS-1 settle
+// (one-in-flight until CF-6). Events flow back through `mailbox` — the
+// serve loop drains it on the serve thread. Velite-free by construction
+// (the mailbox is opaque here).
+class WireEventMailbox;
+using ChromeWireSubscribeFn = std::function<std::string(
+    const std::string& uri, const std::string& sub_id,
+    WireEventMailbox* mailbox)>;
+
 class UdsRegister {
  public:
   UdsRegister();
@@ -77,7 +92,8 @@ class UdsRegister {
              const std::string& facet,
              const std::string& peer_seed,
              ChromeDispatchFn dispatch,
-             const std::vector<uint8_t>& cap_anchor);
+             const std::vector<uint8_t>& cap_anchor,
+             ChromeWireSubscribeFn wire_subscribe = {});
 
   // Stop the serve loop, close the connection (the hub revokes the facet), join.
   void Stop();

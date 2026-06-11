@@ -20,6 +20,7 @@
 #include "aurelian/conformance/unified_bootstrap.h"
 #include "aurelian/federation/nav_handle_internal.h"
 #include "aurelian/federation/serve_pump.h"
+#include "aurelian/federation/wire_event_mailbox.h"
 #include "base/logging.h"
 #include "velite/channel.hpp"
 #include "velite/agentspaces-wire/conformance_bootstrap.hpp"
@@ -43,6 +44,8 @@ struct ConformanceServe::Impl {
   int fd = -1;
   std::shared_ptr<ConformanceBootstrap> bootstrap;
   std::shared_ptr<Dispatcher> disp;
+  // CF-5: the wire-event mailbox (UI producers, serve-thread drain).
+  WireEventMailbox mailbox;
   std::thread serve_thread;
   std::atomic<bool> stop{false};
   std::atomic<bool> connected{false};
@@ -111,7 +114,14 @@ struct ConformanceServe::Impl {
           // scenario 07).
           return disp->closed() ? ServeDrain::kEnded : ServeDrain::kProgress;
         },
-        []() {});  // poll() is the idle wait
+        []() {},  // poll() is the idle wait
+        // CF-5: the wire-event mailbox drain (the ONE emission path).
+        [this]() {
+          for (velite::agentspaces::Value& entry : mailbox.DrainAll()) {
+            disp->emit_tell(0, std::string("legion-subscription-event"),
+                            std::move(entry));
+          }
+        });
     // The connection/session ended while Stop() has not flipped:
     // launcher-lane semantics (design §2.3-07) — emit CLOSE{eof} if the
     // session is still open (the peer_main.cpp EOF behaviour; the frame
@@ -139,7 +149,8 @@ ConformanceServe::~ConformanceServe() {
 bool ConformanceServe::Start(const std::string& socket_path,
                              ChromeDispatchFn dispatch,
                              const std::vector<uint8_t>& cap_anchor,
-                             base::OnceClosure on_disconnect) {
+                             base::OnceClosure on_disconnect,
+                             ChromeWireSubscribeFn wire_subscribe) {
   // Raw connect-out (the launcher listens; NDJSON bytes, no envelope
   // framing — the launcher pumps these lines verbatim to the runner).
   const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
@@ -174,7 +185,8 @@ bool ConformanceServe::Start(const std::string& socket_path,
 
   Impl* impl = impl_.get();
   impl_->disp = std::make_shared<Dispatcher>(
-      MakeUnifiedSlotZero(impl_->bootstrap, std::move(dispatch), cap_anchor),
+      MakeUnifiedSlotZero(impl_->bootstrap, std::move(dispatch), cap_anchor,
+                          std::move(wire_subscribe), &impl_->mailbox),
       [impl](const std::string& frame) { impl->SendLine(frame); });
   auto bootstrap = impl_->bootstrap;
   impl_->disp->set_audit([bootstrap](std::string event, std::string trace_id) {
