@@ -89,8 +89,11 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "handles/wire-four-acquisition-rules");
     Add(&v, "handles/wire-no-ambient-acquisition");
     Add(&v, "handles/wire-no-ambient-state-read");
-    // --- Handles introspection + area.
+    // --- Handles introspection + area (the F1-corrected predicate
+    // returned `handles` + post-tell-ask-refactor to the lane).
+    Add(&v, "handles");
     Add(&v, "handles/contract-introspection");
+    Add(&v, "handles/post-tell-ask-refactor");
     Add(&v, "handles/wire-__getType");
     Add(&v, "handles/wire-__getSchema");
     // --- Agentspace.
@@ -105,10 +108,18 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "kg/wire-kgnode-reserved-messages");
     Add(&v, "kg/typed-handle-prototype");
     Add(&v, "kg/wire-query");
+    // --- query (rides the kg facility; returned to the lane by the
+    // F1-corrected predicate — their vectors are rm.get/{h}.ask-driven).
+    Add(&v, "query/subsumption-typed");
+    Add(&v, "query/grammar");
+    Add(&v, "query/projection-capability");
+    Add(&v, "query/update-atomic");
+    Add(&v, "query/wire-successor-specification");
     // --- provenance (rides the kg fact store; the query/* five and
     // provenance/wire-identifies-relation downgraded CF-RV).
     Add(&v, "provenance/wire-fact-provenance-fields");
     Add(&v, "provenance/wire-freshness-modes");
+    Add(&v, "provenance/wire-identifies-relation");  // §3.3c-5; lane (F1)
     // --- subscribe (the vendored KG wire-streaming trio; the chrome event
     // surface joins at CF-5).
     Add(&v, "subscribe/wire-streaming");
@@ -128,6 +139,7 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "discovery/wire-catalog");
     Add(&v, "discovery/catalog");
     Add(&v, "discovery/wire-get");
+    Add(&v, "discovery/wire-getResource");  // lane (F1-corrected)
     Add(&v, "discovery/wire-bootstrap-handle-canonical-surface");
     Add(&v, "discovery/wire-one-resolver-slot-0");
     // --- observability.
@@ -151,10 +163,15 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "local-resources/wire-schema-declaration");
     Add(&v, "local-resources/wire-capability-scoped-getresource");
     Add(&v, "local-resources/wire-native-error-mapping");
+#if defined(AURELIAN_CLAIMS_HAS_KG)
+    Add(&v, "local-resources/wire-resource-queryable-as-kg-entity");  // F1
+#endif
     // --- federation (the registry surface L0-core 05 drives; the cross-org
-    // sub-facets stay queued CF-L2 + capped).
+    // sub-facets stay queued CF-L2 + capped). The `federation` AREA row
+    // downgraded CF-RV per the re-review's (d): its only cited evidence
+    // (the V=2 registry vectors) is harness-vocabulary under the corrected
+    // predicate, and the row carried no scenario citation.
     Add(&v, "federation/peer-registry");
-    Add(&v, "federation");
     // --- embodiment (the kept membrane rows + the rows this design
     // discharges).
     Add(&v, "embodiment/wire-install-membrane");
@@ -176,6 +193,7 @@ const std::vector<std::string>& aurelian_claimed_internal_facets() {
     Add(&v, "agentspace/internal-audit-log");
     Add(&v, "embodiment/internal-operator-config-typed");
 #if defined(AURELIAN_CLAIMS_HAS_ONTOLOGY)
+    Add(&v, "ontology/internal-bootstrap-types");  // lane (F1-corrected)
     Add(&v, "ontology/internal-no-parallel-subsumption-index");
 #endif
 #if defined(AURELIAN_CLAIMS_HAS_KG)

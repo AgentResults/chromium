@@ -62,7 +62,7 @@ function section(name, next) {
 }
 const claimedWire = [...section('claimed-wire', '# === CLAIMED \\(internal')
   .matchAll(/^  - ([\w./*_-]+)/gm)].map(m => m[1]);
-const claimedInternal = [...section('claimed-internal', '# === QUEUED')
+const claimedInternal = [...section('claimed-internal', 'queued:')
   .matchAll(/^  - ([\w./*_-]+)/gm)].map(m => m[1]);
 const facetsOf = s => [...s.matchAll(/facet: "?([\w./*_-]+)"?/g)].map(m => m[1]);
 const queued = facetsOf(section('queued', '# === NOT CLAIMED'));
@@ -167,7 +167,7 @@ console.log(`all ${entries.length} entries classified — remainder ∅`);
 // vector evidence binds to vectors whose ops the canonical runner DRIVES
 // AGAINST THE SPAWNED PEER. Derived from op-block-runner.js's own op
 // dispatch (runOp, lib/op-block-runner.js:231-361): a `call` is dispatchable
-// iff it is a "{ref}.method" handle/fixture call (REF_RE_DOT :364 — routed
+// iff it is a "{ref}.method" handle/fixture call (REF_RE_DOT :365 — routed
 // to the spawned peer's session/slots), a `test.*` op (:356-358 — "each op
 // is an ask against the spawned peer subprocess"), or one of the bare ops
 // in the :246-353 switch — every non-local one of which launches or asks
@@ -183,8 +183,21 @@ const BARE_OPS = new Set([
   'Peer.getResourceManifest', 'TempFile.write', 'Embodiment.new', 'Peer.new',
 ]);
 function opCalls(text) {
-  return [...text.matchAll(/^\s*(?:- )?call:\s*"?([^"\n]+?)"?\s*$/gm)]
-    .map(m => m[1].trim());
+  // BOTH op spellings (re-review F1 — the original line-anchored regex was
+  // blind to inline-map ops `- { call: "X", args: [...] }`):
+  //  (1) quoted, anywhere (block OR inline; {ref} calls are always quoted);
+  //  (2) unquoted block-form lines (`call: rm.get`);
+  //  (3) unquoted inline-map values (flow context: no spaces/quotes/braces
+  //      possible in an unquoted scalar there).
+  const calls = [];
+  for (const m of text.matchAll(/call:\s*"([^"]+)"/g)) calls.push(m[1].trim());
+  for (const m of text.matchAll(/^\s*(?:- )?call:\s*([^"\s][^\n]*?)\s*$/gm)) {
+    calls.push(m[1].trim());
+  }
+  for (const m of text.matchAll(/[{,]\s*call:\s*([^\s",}]+)/g)) {
+    calls.push(m[1].trim());
+  }
+  return calls;
 }
 function implDriving(text) {
   const calls = opCalls(text);
