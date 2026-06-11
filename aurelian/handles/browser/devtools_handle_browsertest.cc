@@ -9,8 +9,8 @@
 // remaining CapturesCdpEvent migrates at ACM-4). The assertions are
 // unchanged in substance: the same commands, the same observable results,
 // now through the replacement surface they pinned the baseline for.
-
-#include "aurelian/handles/browser/devtools_handle.h"
+// (ACM-R F6c: the leftover devtools_handle.h include went — no symbol
+// from it is used here since the ACM-3/4 migrations.)
 
 #include <memory>
 #include <string>

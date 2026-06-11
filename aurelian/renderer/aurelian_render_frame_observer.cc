@@ -12,7 +12,6 @@
 
 #include "aurelian/capability/cap_chain.h"
 #include "aurelian/capability/cap_membrane.h"
-#include "aurelian/capability/cap_predicate.h"
 #include "aurelian/capability/cap_wire.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"

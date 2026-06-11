@@ -283,8 +283,9 @@ if (enable_aurelian) {
     deps = [
       # ACM-7: the three ontology audits gate the composition root, so no
       # binary links the mirror without the binding holding (design
-      # section 6).
+      # section 6). ACM-R adds the no-parallel-bespoke lock (section 7).
       ":aurelian_host_correspondence_audit",
+      ":aurelian_no_parallel_bespoke_audit",
       ":aurelian_ontology_consistency_audit",
       ":aurelian_surface_coverage_audit",
 
@@ -869,6 +870,32 @@ if (enable_aurelian) {
   # projector or recorded out-of-scope row, each family pinned to a live
   # host anchor; the descriptor leg re-parses per build (auto-grows with
   # every roll).
+  # ACM-R: the no-parallel-bespoke lock (design section 7, HS-2 —
+  # GRC-14-style). Gates aurelian_root like the three ACM-7 audits: no
+  # binary links the composition root while a bespoke file lacks its ONE
+  # executed inventory disposition, a DELETE-row file survives, a facade
+  # verb shadows the mirror unrecorded, or a row escapes audit scope. The
+  # audit enumerates the live tree (scope globs), so its inputs name the
+  # decision sources; deletions re-verify on the next inventory/root edit
+  # or standalone run.
+  action("aurelian_no_parallel_bespoke_audit") {
+    script = "inventory/no_parallel_bespoke_audit.py"
+    inputs = [
+      "docs/AURELIAN-BESPOKE-INVENTORY.md",
+      "handles/root/root_handle.cc",
+    ]
+    outputs = [ "$target_gen_dir/no_parallel_bespoke_audit.stamp" ]
+    args = [
+      "--aurelian-root",
+      rebase_path(".", root_build_dir),
+      "--inventory",
+      rebase_path("docs/AURELIAN-BESPOKE-INVENTORY.md", root_build_dir),
+      "--stamp",
+      rebase_path("$target_gen_dir/no_parallel_bespoke_audit.stamp",
+                  root_build_dir),
+    ]
+  }
+
   action("aurelian_host_correspondence_audit") {
     script = "ontology/host_correspondence_audit.py"
     inputs = [
