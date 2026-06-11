@@ -323,7 +323,11 @@ struct SpecWireHarness {
   UdsRegister reg;
   std::shared_ptr<HubBootstrap> hub_bs;
   std::unique_ptr<Dispatcher> hub;
-  uint8_t buf[65536];
+  // ACM-9p: the hub-side caller buffer sized to the wire MTU ON THE HEAP
+  // (the G3 caveat — never a 1 MiB stack buffer), so spec-legal large
+  // envelopes (64 KB, 1 MiB] can cross the test hub hop too.
+  std::unique_ptr<uint8_t[]> buf =
+      std::make_unique<uint8_t[]>(velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES);
 
   bool Start(ChromeDispatchFn dispatch,
              const std::vector<uint8_t>& cap_anchor = {}) {
@@ -362,9 +366,11 @@ struct SpecWireHarness {
   void Pump() {
     for (;;) {
       size_t n = 0;
-      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+      if (server.recv(buf.get(), velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES,
+                      &n) == velite::ChannelError::OK &&
           n > 0) {
-        hub->on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+        hub->on_inbound(
+            std::string(reinterpret_cast<const char*>(buf.get()), n));
       } else {
         break;
       }
@@ -879,6 +885,79 @@ TEST(AurelianUdsCapGateTest, CapWithNoProvisionedAnchorRefused) {
   EXPECT_FALSE(o.ok);
   EXPECT_NE(o.reason.find("cap-untrusted-anchor"), std::string::npos)
       << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// ---------------------------------------------------------------------------
+// ACM-9p (design section 8) — the fork's caller-buffer MTU hop. The fixed
+// channel (VELITE_CHANNEL_MAX_ENVELOPE_BYTES, heap rx staging, typed
+// MessageTooLarge) delivers any spec-legal envelope; the BINDING constraint
+// left is the fork serve loop's caller buffer (kRxBuffer). RED 1: a ~900 KB
+// spec-legal round-trip wedges on the 64 KB caller buffer — a hang, so the
+// harness treats timeout as failure. RED 2: an envelope ABOVE the MTU must be
+// refused TYPED at the wire (the session layer answers the channel's
+// MessageTooLarge with CLOSE{frame-too-large}), never silently ignored.
+// ---------------------------------------------------------------------------
+
+// RED 1 — spec-legal frames cross: ~900 KB spec in, ~900 KB reply out, both
+// over the real register UDS (above every 64 KB wedge, legal under the MTU).
+TEST(AurelianUdsMtuTest, SpecLegalLargeEnvelopeCrossesBothDirections) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  SpecWireHarness h;
+  std::string seen_path;
+  ASSERT_TRUE(h.Start(
+      [&](const std::string& p, const std::string& s) -> std::string {
+        seen_path = p;
+        return s;  // echo the serialized spec: the reply leg carries it back
+      }));
+
+  const std::string big(900 * 1024, 'a');
+  uint32_t slot = h.hub->emit_ask(
+      0, "dispatchAt",
+      Value::make_object(
+          {{"uri", Value(std::string("legion://chrome/cdp/Page/probe"))},
+           {"verb", Value(std::string("invoke"))},
+           {"spec", Value::make_object({{"payload", Value(big)}})}}));
+  Dispatcher::AnswerOutcome o = h.AskSettled(slot);
+
+  ASSERT_TRUE(o.settled)
+      << "the ~900 KB round-trip HUNG — a 64 KB caller-buffer wedge "
+         "(timeout == failure per the plan)";
+  ASSERT_TRUE(o.ok) << o.reason;
+  EXPECT_EQ(seen_path, "cdp/Page/probe/invoke");
+  ASSERT_TRUE(o.value.is_string());
+  EXPECT_GE(o.value.as_string().size(), big.size())
+      << "the reply leg dropped the large payload";
+  EXPECT_NE(o.value.as_string().find("aaaa"), std::string::npos);
+}
+
+// RED 2 — the bound is enforced typed at the wire: one raw envelope of
+// MTU+1 bytes is answered with CLOSE{frame-too-large} (the hub dispatcher
+// observes the close), and the dispatch layer never sees it.
+TEST(AurelianUdsMtuTest, AboveMtuEnvelopeRefusedTypedClose) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      }));
+
+  std::vector<uint8_t> oversize(velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES + 1,
+                                'x');
+  ASSERT_EQ(h.server.send(oversize.data(), oversize.size()),
+            velite::ChannelError::OK);
+
+  bool closed = false;
+  for (int i = 0; i < 4000 && !closed; ++i) {
+    h.Pump();
+    closed = h.hub->closed();
+    base::PlatformThread::Sleep(base::Milliseconds(1));
+  }
+  EXPECT_TRUE(closed)
+      << "an above-MTU envelope must be refused TYPED "
+         "(CLOSE{frame-too-large}) — it was silently ignored";
   EXPECT_FALSE(dispatched.load());
 }
 

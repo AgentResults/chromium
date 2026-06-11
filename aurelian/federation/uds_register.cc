@@ -13,6 +13,7 @@
 #include "aurelian/capability/cap_gate.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#include "velite/agentspaces/limits.hpp"
 #include "velite/agentspaces-wire/dispatcher.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/json_marshal.hpp"
@@ -60,7 +61,12 @@ class NavRef : public Handle {
   Value empty_;
 };
 
-constexpr size_t kRxBuffer = 65536;
+// ACM-9p (design section 8): the caller buffer is sized to the wire MTU so
+// every spec-legal envelope (64 KB, 1 MiB] the fixed channel stages can be
+// DELIVERED — the 64 KB wedge was the caller buffer, not the channel. The
+// buffer lives ON THE HEAP (Serve() make_unique) per the G3 caveat: a 1 MiB
+// serve-thread stack buffer would repeat the wss_peer 63230cc169 overflow.
+constexpr size_t kRxBuffer = velite::VELITE_CHANNEL_MAX_ENVELOPE_BYTES;
 constexpr char kChromeUriPrefix[] = "legion://chrome";
 
 // HS-3 (ACM-2w, design section 5 round-5 review M5): the spec crosses the
@@ -329,6 +335,14 @@ struct UdsRegister::Impl {
       for (;;) {
         size_t n = 0;
         velite::ChannelError e = channel->recv(buf.get(), kRxBuffer, &n);
+        if (e == velite::ChannelError::MessageTooLarge) {
+          // ACM-9p: the channel refused an above-MTU envelope at header time
+          // (body drained, framing preserved); the session layer answers the
+          // spec's typed refusal — limits.md section 2 CLOSE{frame-too-large}.
+          disp->emit_close(std::string(
+              velite::agentspaces::limits::kReasonFrameTooLarge));
+          break;
+        }
         if (e != velite::ChannelError::OK || n == 0) {
           break;
         }
