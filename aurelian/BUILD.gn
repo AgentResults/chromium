@@ -1076,6 +1076,7 @@ if (enable_aurelian) {
       "capability/cap_membrane_browsertest.cc",
       "catalog/session_context_browsertest.cc",
       "conformance/conformance_serve_browsertest.cc",
+      "federation/nav_cap_browsertest.cc",
       "federation/one_root_browsertest.cc",
       "federation/pending_dispatch_browsertest.cc",
       "federation/wire_event_browsertest.cc",

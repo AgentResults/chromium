@@ -181,7 +181,7 @@ bool ConformanceServe::Start(const std::string& socket_path,
   // chrome mounted pre-seal, claims cap), composed with the SAME slot-0
   // wrapper. Two bring-up modes, ONE surface.
   impl_->bootstrap = BuildUnifiedBootstrap(
-      "", MakeChromeNavHandle("legion://chrome", dispatch));
+      "", MakeChromeNavHandle("legion://chrome", dispatch, cap_anchor));
 
   Impl* impl = impl_.get();
   impl_->disp = std::make_shared<Dispatcher>(

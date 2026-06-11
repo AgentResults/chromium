@@ -26,8 +26,14 @@ namespace aurelian {
 // A navigable NavHandle bound to `uri`, resolving leaf asks through
 // `dispatch` (the ONE exported ChromeDispatchFn; HS-3 serialized value-only
 // spec). Deeper getResource chains compose as on the register-in wire.
+// CF-8 (design §7): `cap_anchor` is the operator trust anchor — presented
+// caps at deeper getResource verify against it and BIND the minted child;
+// empty = presented caps fail closed (capless navigation keeps
+// connection-level authority).
 std::shared_ptr<velite::agentspaces::Handle> MakeChromeNavHandle(
-    const std::string& uri, BeginChromeDispatchFn dispatch);
+    const std::string& uri,
+    BeginChromeDispatchFn dispatch,
+    const std::vector<uint8_t>& cap_anchor = {});
 
 // CF-4: the ONE slot-0 wrapper (AurelianSlotZero, uds_register.cc — design
 // §4.2): the unified vendored bootstrap composed with the dispatchAt FOLD

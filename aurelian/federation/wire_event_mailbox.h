@@ -64,6 +64,14 @@ class WireEventMailbox {
   // Serve thread: move every queued entry out (arrival order).
   std::vector<velite::agentspaces::Value> DrainAll();
 
+  // CF-8 (design §7): a subscription admitted under an EXPIRING cap records
+  // its expiry here at registration; the delivery path re-evaluates `now` —
+  // a post-expiry Push queues the ONE typed terminal cancelled notify
+  // (reason cap-refused:cap-expired) instead of the event and marks the
+  // subscription dead (the caller cancels the producer side, the overflow
+  // lifecycle). 0 = no expiry.
+  void SetSubscriptionExpiry(const std::string& sub_id, int64_t expires_unix);
+
   // The overflow bound (default: the limits.md queue-depth bound).
   void SetPerSubscriptionCapForTesting(size_t cap);
 
@@ -76,6 +84,7 @@ class WireEventMailbox {
   base::Lock lock_;
   std::deque<velite::agentspaces::Value> queue_;
   std::map<std::string, size_t> queued_per_sub_;
+  std::map<std::string, int64_t> expiry_per_sub_;
   std::set<std::string> overflowed_;
   size_t per_sub_cap_;
 };

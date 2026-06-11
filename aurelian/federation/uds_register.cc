@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "aurelian/capability/cap_gate.h"
+#include "aurelian/capability/cap_wire.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "velite/agentspaces/limits.hpp"
@@ -145,6 +146,62 @@ std::string DerivePath(const std::string& uri, const std::string& verb) {
   return rel + "/" + verb;
 }
 
+// CF-8 (design §7): the ONE operator cap trust anchor, shared by every
+// chrome-surface seam — the dispatchAt facade, getResource, bound NavHandle
+// asks, and the wire subscribe all gate against THIS. No anchor → presented
+// caps fail closed (GateFederationDispatch refuses cap-untrusted-anchor).
+struct GateAnchor {
+  PubKey pub{};
+  bool present = false;
+};
+
+std::shared_ptr<const GateAnchor> MakeGateAnchor(
+    const std::vector<uint8_t>& bytes) {
+  auto anchor = std::make_shared<GateAnchor>();
+  if (bytes.size() == anchor->pub.size()) {
+    std::copy(bytes.begin(), bytes.end(), anchor->pub.begin());
+    anchor->present = true;
+  }
+  return anchor;
+}
+
+// CF-8: AND-only chain composition (constraints.md §5 — attenuation can only
+// narrow): EVERY bound/presented chain must admit (verb, uri); the first
+// refusal is THE typed answer. `now` is re-evaluated per call — caps expire,
+// so the predicate decision is never cached (the chain's signature check is
+// cacheable; this seam keeps the call uniform instead).
+std::string GateChains(const std::vector<std::string>& chains,
+                       const GateAnchor& anchor,
+                       const std::string& canonical_uri,
+                       const std::string& verb) {
+  const int64_t now = base::Time::Now().ToTimeT();
+  for (const std::string& chain : chains) {
+    std::string denied = GateFederationDispatch(
+        chain, anchor.pub, anchor.present, canonical_uri, verb, now);
+    if (!denied.empty()) {
+      return denied;
+    }
+  }
+  return std::string();
+}
+
+// The minimum nonzero link expiry of a serialized chain — the per-delivery
+// re-check input for wire subscriptions (design §7: under operator-anchor
+// caps the per-delivery re-check reduces to expiry). 0 = no expiry.
+int64_t ChainMinExpiry(const std::string& serialized_chain) {
+  std::vector<CapLink> chain;
+  if (!ParseChain(serialized_chain, &chain)) {
+    return 0;
+  }
+  int64_t expires = 0;
+  for (const CapLink& link : chain) {
+    if (link.expires != 0 && (expires == 0 || link.expires < expires)) {
+      expires = link.expires;
+    }
+  }
+  return expires;
+}
+
 // ACM-8: the canonical ABSOLUTE form of a dispatchAt uri, derived by the
 // exact stripping DerivePath applies — so the cap gate always matches the
 // same resource the dispatch resolves, whichever spelling (absolute /
@@ -172,12 +229,24 @@ std::string CanonicalGateUri(const std::string& uri) {
 // Dispatcher exports this as a slot; marius's MariusPeerHandle chains the same
 // way). A leaf ask resolves against the sealed root via the injected dispatch;
 // a further getResource yields a deeper NavHandle, so navigation composes.
+//
+// CF-8 (design §7): the handle CARRIES THE ATTENUATION IT WAS ACQUIRED UNDER
+// — `chains_` is the verified cap set the acquisition presented/inherited
+// (empty = connection-level authority, the status quo). Every ask re-runs
+// the ONE evaluator over CanonicalGateUri(uri_) + verb (`now` re-evaluated:
+// caps expire between acquisition and ask); child minting composes AND-only
+// (parent ∧ presented) and is itself gated over the CHILD uri, so
+// attenuation can only narrow.
 class NavHandle : public Handle {
  public:
-  static std::shared_ptr<NavHandle> make(std::string uri,
-                                         BeginChromeDispatchFn dispatch) {
-    return std::shared_ptr<NavHandle>(
-        new NavHandle(std::move(uri), std::move(dispatch)));
+  static std::shared_ptr<NavHandle> make(
+      std::string uri,
+      BeginChromeDispatchFn dispatch,
+      std::shared_ptr<const GateAnchor> anchor,
+      std::vector<std::string> chains) {
+    return std::shared_ptr<NavHandle>(new NavHandle(
+        std::move(uri), std::move(dispatch), std::move(anchor),
+        std::move(chains)));
   }
 
   velite::agentspaces::StateKind state_kind() const override {
@@ -194,7 +263,35 @@ class NavHandle : public Handle {
       if (!uv || !uv->is_string()) {
         return ValueHandle::make_broken("legion://errors/InvalidArgument");
       }
-      return NavRef::make(NavHandle::make(uv->as_string(), dispatch_));
+      // CF-8: parent ∧ presented — the child inherits every bound chain
+      // plus the presented one, and the acquisition itself is gated over
+      // the CHILD uri against ALL of them (a wider presented cap cannot
+      // escape the parent's subtree).
+      std::vector<std::string> child_chains = chains_;
+      const Value* capv = spec.object_get("cap");
+      if (capv) {
+        if (!capv->is_string()) {
+          return ValueHandle::make_broken("cap-refused:cap-chain-malformed");
+        }
+        child_chains.push_back(capv->as_string());
+      }
+      std::string denied =
+          GateChains(child_chains, *anchor_,
+                     CanonicalGateUri(uv->as_string()), "getResource");
+      if (!denied.empty()) {
+        return ValueHandle::make_broken(denied);
+      }
+      return NavRef::make(NavHandle::make(uv->as_string(), dispatch_,
+                                          anchor_, std::move(child_chains)));
+    }
+    // CF-8: EVERY other ask on a bound handle re-runs the gate per ask —
+    // __getIdentity included (it is a leaf ask; verbs classify read via
+    // the __get prefix, and an expired chain refuses here too).
+    std::string denied =
+        GateChains(chains_, *anchor_, CanonicalGateUri(uri_),
+                   std::string(msg));
+    if (!denied.empty()) {
+      return ValueHandle::make_broken(denied);
     }
     if (msg == "__getIdentity") {
       return ValueHandle::make(self_);
@@ -223,13 +320,20 @@ class NavHandle : public Handle {
   void tell(std::string_view, const Value&) override {}
 
  private:
-  NavHandle(std::string uri, BeginChromeDispatchFn dispatch)
+  NavHandle(std::string uri,
+            BeginChromeDispatchFn dispatch,
+            std::shared_ptr<const GateAnchor> anchor,
+            std::vector<std::string> chains)
       : uri_(std::move(uri)),
         dispatch_(std::move(dispatch)),
+        anchor_(std::move(anchor)),
+        chains_(std::move(chains)),
         self_(uri_) {}
 
   std::string uri_;
   BeginChromeDispatchFn dispatch_;
+  std::shared_ptr<const GateAnchor> anchor_;
+  std::vector<std::string> chains_;
   Value self_;
 };
 
@@ -257,11 +361,11 @@ class AurelianSlotZero : public Handle {
   static std::shared_ptr<AurelianSlotZero> make(
       std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
       BeginChromeDispatchFn dispatch,
-      const std::vector<uint8_t>& cap_anchor,
+      std::shared_ptr<const GateAnchor> anchor,
       ChromeWireSubscribeFn wire_subscribe = {},
       WireEventMailbox* mailbox = nullptr) {
     return std::shared_ptr<AurelianSlotZero>(new AurelianSlotZero(
-        std::move(vendored), std::move(dispatch), cap_anchor,
+        std::move(vendored), std::move(dispatch), std::move(anchor),
         std::move(wire_subscribe), mailbox));
   }
 
@@ -298,10 +402,9 @@ class AurelianSlotZero : public Handle {
         if (!capv->is_string()) {
           return ValueHandle::make_broken("cap-refused:cap-chain-malformed");
         }
-        std::string denied = GateFederationDispatch(
-            capv->as_string(), anchor_, has_anchor_,
-            CanonicalGateUri(uv->as_string()), vv->as_string(),
-            base::Time::Now().ToTimeT());
+        std::string denied = GateChains({capv->as_string()}, *anchor_,
+                                        CanonicalGateUri(uv->as_string()),
+                                        vv->as_string());
         if (!denied.empty()) {
           return ValueHandle::make_broken(denied);
         }
@@ -344,8 +447,31 @@ class AurelianSlotZero : public Handle {
         if (!sid || !sid->is_string()) {
           return ValueHandle::make_broken("legion://errors/InvalidArgument");
         }
+        // CF-8 (design §7): the wire subscribe is an ask and passes the
+        // SAME gate BEFORE any registration (subscribe.md §5 at-subscribe-
+        // time intersection). The chain's minimum expiry feeds the
+        // per-delivery re-check (the mailbox drops post-expiry events and
+        // terminates the subscription typed).
+        int64_t cap_expires = 0;
+        const Value* capv = spec.object_get("cap");
+        if (capv) {
+          if (!capv->is_string()) {
+            return ValueHandle::make_broken(
+                "cap-refused:cap-chain-malformed");
+          }
+          std::string denied = GateChains(
+              {capv->as_string()}, *anchor_,
+              CanonicalGateUri(uv->as_string()), "legion-subscribe-remote");
+          if (!denied.empty()) {
+            return ValueHandle::make_broken(denied);
+          }
+          cap_expires = ChainMinExpiry(capv->as_string());
+        }
         if (!wire_subscribe_ || !mailbox_) {
           return ValueHandle::make_broken("wire-eventing-unavailable");
+        }
+        if (cap_expires != 0) {
+          mailbox_->SetSubscriptionExpiry(sid->as_string(), cap_expires);
         }
         // CF-6: subscribe is just an ask — its ack rides the SAME deferred
         // pending path as every chrome dispatch (no special-casing in the
@@ -375,7 +501,26 @@ class AurelianSlotZero : public Handle {
                 0 ||
             uri.rfind("legion://", 0) != 0;  // relative form
         if (chrome_subtree && uri != kChromeUriPrefix) {
-          return NavRef::make(NavHandle::make(uri, dispatch_));
+          // CF-8 (design §7): a presented cap is verified to the anchor and
+          // enforced over the CANONICAL target uri at acquisition; the
+          // returned handle is BORN BOUND to the verified chain. Absent:
+          // connection-level authority (status quo).
+          std::vector<std::string> chains;
+          const Value* capv = spec.object_get("cap");
+          if (capv) {
+            if (!capv->is_string()) {
+              return ValueHandle::make_broken(
+                  "cap-refused:cap-chain-malformed");
+            }
+            chains.push_back(capv->as_string());
+            std::string denied = GateChains(
+                chains, *anchor_, CanonicalGateUri(uri), "getResource");
+            if (!denied.empty()) {
+              return ValueHandle::make_broken(denied);
+            }
+          }
+          return NavRef::make(
+              NavHandle::make(uri, dispatch_, anchor_, std::move(chains)));
         }
       }
       return vendored_->ask(msg, spec);
@@ -390,36 +535,36 @@ class AurelianSlotZero : public Handle {
   AurelianSlotZero(
       std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored,
       BeginChromeDispatchFn dispatch,
-      const std::vector<uint8_t>& cap_anchor,
+      std::shared_ptr<const GateAnchor> anchor,
       ChromeWireSubscribeFn wire_subscribe,
       WireEventMailbox* mailbox)
       : vendored_(std::move(vendored)),
         dispatch_(std::move(dispatch)),
+        anchor_(std::move(anchor)),
         wire_subscribe_(std::move(wire_subscribe)),
-        mailbox_(mailbox) {
-    if (cap_anchor.size() == anchor_.size()) {
-      std::copy(cap_anchor.begin(), cap_anchor.end(), anchor_.begin());
-      has_anchor_ = true;
-    }
-  }
+        mailbox_(mailbox) {}
 
   std::shared_ptr<velite::agentspaces::ConformanceBootstrap> vendored_;
   BeginChromeDispatchFn dispatch_;
+  // ACM-8/CF-8: the operator cap trust anchor (the SAME anchor the renderer
+  // membranes are provisioned with), shared with every NavHandle this
+  // surface mints. No anchor → presented caps fail closed.
+  std::shared_ptr<const GateAnchor> anchor_;
   ChromeWireSubscribeFn wire_subscribe_;
   WireEventMailbox* mailbox_ = nullptr;
-  // ACM-8: the operator cap trust anchor (the SAME anchor the renderer
-  // membranes are provisioned with). No anchor → presented caps fail closed.
-  PubKey anchor_{};
-  bool has_anchor_ = false;
 };
 
 }  // namespace
 
 // CF-1 (nav_handle_internal.h): the ONE NavHandle implementation exported to
 // the conformance serve for the legion://chrome mount — no parallel handle.
-std::shared_ptr<Handle> MakeChromeNavHandle(const std::string& uri,
-                                            BeginChromeDispatchFn dispatch) {
-  return NavHandle::make(uri, std::move(dispatch));
+// CF-8: carries the anchor so presented caps verify on this bring-up too.
+std::shared_ptr<Handle> MakeChromeNavHandle(
+    const std::string& uri,
+    BeginChromeDispatchFn dispatch,
+    const std::vector<uint8_t>& cap_anchor) {
+  return NavHandle::make(uri, std::move(dispatch), MakeGateAnchor(cap_anchor),
+                         {});
 }
 
 // CF-4 (nav_handle_internal.h): the ONE slot-0 wrapper, exported so the
@@ -431,8 +576,8 @@ std::shared_ptr<Handle> MakeUnifiedSlotZero(
     ChromeWireSubscribeFn wire_subscribe,
     WireEventMailbox* mailbox) {
   return AurelianSlotZero::make(std::move(vendored), std::move(dispatch),
-                                cap_anchor, std::move(wire_subscribe),
-                                mailbox);
+                                MakeGateAnchor(cap_anchor),
+                                std::move(wire_subscribe), mailbox);
 }
 
 struct UdsRegister::Impl {
@@ -519,12 +664,14 @@ bool UdsRegister::Start(const std::string& socket_path,
   // CF-4 (design §4.1/§4.2): the UNIFIED bootstrap — the same construction
   // the conformance serve runs (seeded identity, chrome mounted pre-seal,
   // claims cap) — composed with the thin dispatchAt facade. Two bring-up
-  // modes, ONE surface.
+  // modes, ONE surface. CF-8: ONE anchor, shared by the mounted root and
+  // the wrapper (every navigation seam gates against the same trust root).
+  auto anchor = MakeGateAnchor(cap_anchor);
   auto vendored = BuildUnifiedBootstrap(
-      peer_seed, NavHandle::make(kChromeUriPrefix, dispatch));
+      peer_seed, NavHandle::make(kChromeUriPrefix, dispatch, anchor, {}));
   velite::UdsChannel* raw = impl_->channel.get();
   impl_->disp = std::make_shared<Dispatcher>(
-      AurelianSlotZero::make(vendored, std::move(dispatch), cap_anchor,
+      AurelianSlotZero::make(vendored, std::move(dispatch), std::move(anchor),
                              std::move(wire_subscribe), &impl_->mailbox),
       [raw](const std::string& frame) {
         raw->send(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());

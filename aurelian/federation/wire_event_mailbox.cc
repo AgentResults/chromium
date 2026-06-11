@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "base/time/time.h"
 #include "velite/agentspaces/limits.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
 
@@ -40,6 +41,23 @@ WireEventMailbox::PushResult WireEventMailbox::Push(const std::string& sub_id,
   base::AutoLock hold(lock_);
   if (overflowed_.count(sub_id)) {
     return PushResult::kDropped;
+  }
+  // CF-8 (design §7): per-delivery re-evaluation of the subscription cap's
+  // expiry — the predicate decision is never cached. Past expiry: drop the
+  // event, queue the ONE typed terminal, mark the subscription dead.
+  if (const auto it = expiry_per_sub_.find(sub_id);
+      it != expiry_per_sub_.end() && it->second != 0 &&
+      base::Time::Now().ToTimeT() > it->second) {
+    overflowed_.insert(sub_id);
+    queue_.push_back(Value::make_object(
+        {{"sub_id", Value(sub_id)},
+         {"msg", Value(std::string("legion-notify"))},
+         {"event",
+          Value::make_object(
+              {{"state", Value(std::string("cancelled"))},
+               {"reason",
+                Value(std::string("cap-refused:cap-expired"))}})}}));
+    return PushResult::kOverflowedNow;
   }
   size_t& queued = queued_per_sub_[sub_id];
   if (queued >= per_sub_cap_) {
@@ -79,6 +97,12 @@ std::vector<Value> WireEventMailbox::DrainAll() {
 void WireEventMailbox::SetPerSubscriptionCapForTesting(size_t cap) {
   base::AutoLock hold(lock_);
   per_sub_cap_ = cap;
+}
+
+void WireEventMailbox::SetSubscriptionExpiry(const std::string& sub_id,
+                                             int64_t expires_unix) {
+  base::AutoLock hold(lock_);
+  expiry_per_sub_[sub_id] = expires_unix;
 }
 
 // --- WireSinkHandle --------------------------------------------------------

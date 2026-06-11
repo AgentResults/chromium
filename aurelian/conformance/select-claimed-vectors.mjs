@@ -191,7 +191,11 @@ function opCalls(text) {
   //      possible in an unquoted scalar there).
   const calls = [];
   for (const m of text.matchAll(/call:\s*"([^"]+)"/g)) calls.push(m[1].trim());
-  for (const m of text.matchAll(/^\s*(?:- )?call:\s*([^"\s][^\n]*?)\s*$/gm)) {
+  // [ \t]* (never \s*) after the key: a bare `call:` map key must not let
+  // the match span the newline and capture the NEXT line as a junk op
+  // (observed in materialiser-typed-correctly.yaml; approving-review
+  // residual (ii)).
+  for (const m of text.matchAll(/^\s*(?:- )?call:[ \t]*([^"\s][^\n]*?)\s*$/gm)) {
     calls.push(m[1].trim());
   }
   for (const m of text.matchAll(/[{,]\s*call:\s*([^\s",}]+)/g)) {

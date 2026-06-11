@@ -18,7 +18,8 @@
 # subscription named pass runs ALL FOUR single-peer vectors —
 # subscription-cursor-replay INCLUDED, expected red (no cursor surface),
 # exactly the kg/persistence expected-red treatment. Step-3 counts become
-# 7 queued probes / 8 executions; CF-V wall-clock 166. Ground: uniform
+# 7 queued probes / 8 executions; CF-V wall-clock 70 (62 Step-2 + 8
+# Step-3). Ground: uniform
 # mechanism (every queued single-peer vector runs and banks its outcome),
 # no assertion-by-proxy.
 

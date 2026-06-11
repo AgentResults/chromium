@@ -27,7 +27,12 @@ Fails the build when:
       which is exactly the mounted-set surface the ACM-7 coverage audit
       already three-way-locks.);
   (d) an inventory row names a path outside this audit's scope (round-5
-      review M8: audit scope MUST equal inventory scope).
+      review M8: audit scope MUST equal inventory scope);
+  (e) a non-test file outside the sanctioned caller sets calls EnforceCap
+      or GateFederationDispatch — the CF-8 ONE-evaluator lock
+      (conformant-federation design §7: authority on the chrome surface is
+      decided by the ONE predicate at the named seams; a second call-site
+      family is a parallel authorization model).
 """
 
 import argparse
@@ -45,6 +50,7 @@ SCOPE_DIRS = ("handles", "renderer", "media", "conformance")
 
 # Prefix-glob scope (aurelian/-relative).
 SCOPE_PREFIXES = (
+    "federation/nav_cap",
     "federation/nav_handle_internal",
     "federation/pending_dispatch",
     "federation/serve_pump",
@@ -147,6 +153,57 @@ def scan_facade_verbs(root_handle_cc: pathlib.Path):
     }
 
 
+# (e) The ONE-evaluator lock (CF-8, conformant-federation design §7):
+# authority on the chrome surface is decided by GateFederationDispatch
+# against the one operator anchor — no second predicate engine, no second
+# call-site family. The sanctioned caller sets are exact: a NEW file calling
+# either predicate is a parallel authorization model and fails the build
+# (test files excluded — they exercise the gate, they don't decide
+# authority).
+ENFORCE_CAP_CALLERS = {
+    "capability/cap_membrane.h",    # declaration
+    "capability/cap_membrane.cc",   # definition + VerifyAndEnforce
+    "capability/cap_gate.cc",       # the federation-seam wrapper
+    "renderer/aurelian_render_frame_observer.cc",  # the renderer membrane
+}
+GATE_FEDERATION_CALLERS = {
+    "capability/cap_gate.h",        # declaration
+    "capability/cap_gate.cc",       # definition
+    "federation/uds_register.cc",   # ALL federation seams: dispatchAt
+                                    # facade, getResource, NavHandle ask,
+                                    # wire subscribe (design §7 seam list)
+}
+
+
+def scan_predicate_callers(aurelian_root: pathlib.Path):
+    failures = []
+    for sub in ("bootstrap", "capability", "conformance", "federation",
+                "handles", "media", "mirror", "renderer"):
+        base = aurelian_root / sub
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.suffix not in EXTS or not path.is_file():
+                continue
+            rel = str(path.relative_to(aurelian_root))
+            if "_unittest" in rel or "_browsertest" in rel:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"\bEnforceCap\s*\(", text) and \
+                    rel not in ENFORCE_CAP_CALLERS:
+                failures.append(
+                    f"SECOND PREDICATE CALL SITE (e): {rel} calls "
+                    "EnforceCap outside the sanctioned set — ONE evaluator "
+                    "(design §7)")
+            if re.search(r"\bGateFederationDispatch\s*\(", text) and \
+                    rel not in GATE_FEDERATION_CALLERS:
+                failures.append(
+                    f"SECOND PREDICATE CALL SITE (e): {rel} calls "
+                    "GateFederationDispatch outside the sanctioned set — "
+                    "ONE evaluator (design §7)")
+    return failures
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--aurelian-root", required=True)
@@ -192,6 +249,8 @@ def main():
             failures.append(
                 f"NO INVENTORY ROW (a): {rel} — browser-control surface in "
                 "no inventory category was exactly the round-2 leak")
+
+    failures.extend(scan_predicate_callers(aurelian_root))
 
     root_handle_cc = aurelian_root / "handles/root/root_handle.cc"
     if root_handle_cc.is_file():
