@@ -26,6 +26,14 @@ using velite::agentspaces::Value;
 using velite::agentspaces::ValueHandle;
 
 constexpr char kMirrorUri[] = "legion://chrome/cdp";
+constexpr char kTargetsUri[] = "legion://chrome/targets";
+
+// The width model applies to the browser mirror and PAGE/FRAME target
+// sub-mirrors only (design section 2 round-8); every other target type is
+// annotation-not-applicable and dispatch-and-pass-through.
+bool IsPageOrFrameType(const std::string& target_type) {
+  return target_type == "page" || target_type == "iframe";
+}
 
 // The declared Layer-1 type URIs the projector stamps (design section 6;
 // declared in the ontology at ACM-7, where the consistency audit locks
@@ -36,14 +44,24 @@ constexpr char kTypeCommand[] = "legion://types/CdpCommand";
 constexpr char kTypeEvent[] = "legion://types/CdpEvent";
 
 // The ONE mirror node class (design invariant: data-driven, NO per-domain
-// code). A node's kind + path segments fully determine its answers; every
-// answer is projected from CdpCatalog::Get() at ask time.
+// code). A node's kind + scope + path segments fully determine its
+// answers; every answer is projected from CdpCatalog::Get() at ask time.
+// Scope (ACM-3): an empty target id is the BROWSER mirror
+// (legion://chrome/cdp); a non-empty one is THAT target's sub-mirror
+// (legion://chrome/targets/<id>/cdp), whose invokes dispatch on the
+// target's persistent session behind the per-scope session-context gate.
 class CdpMirrorNode : public Handle {
  public:
   enum class Kind { kCatalog, kDomain, kCommand, kEvent };
 
-  CdpMirrorNode(Kind kind, std::string domain, std::string member)
+  struct Scope {
+    std::string target_id;    // empty = the browser mirror
+    std::string target_type;  // DevToolsAgentHost::GetType()'s string
+  };
+
+  CdpMirrorNode(Kind kind, Scope scope, std::string domain, std::string member)
       : kind_(kind),
+        scope_(std::move(scope)),
         domain_(std::move(domain)),
         member_(std::move(member)),
         identity_(MakeUri()) {}
@@ -84,7 +102,10 @@ class CdpMirrorNode : public Handle {
 
  private:
   std::string MakeUri() const {
-    std::string uri = kMirrorUri;
+    std::string uri =
+        scope_.target_id.empty()
+            ? std::string(kMirrorUri)
+            : std::string(kTargetsUri) + "/" + scope_.target_id + "/cdp";
     if (!domain_.empty()) {
       uri += "/" + domain_;
     }
@@ -154,14 +175,26 @@ class CdpMirrorNode : public Handle {
           }
           fields.emplace(key, FromBaseValue(field));
         }
-        std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
-        if (row.has_value()) {
-          fields.emplace("sessionContext",
-                         Value::make_object({
-                             {"inBrowserUnion", Value(row->in_browser_union)},
-                             {"browserOnly", Value(row->browser_only)},
-                             {"conditional", Value(row->conditional)},
-                         }));
+        // The derived rows scope the browser mirror + page/frame
+        // sub-mirrors ONLY; a non-page sub-mirror's annotation is
+        // not-applicable (design section 2 round-8 — its session is
+        // narrow and self-describing by answer).
+        if (!scope_.target_id.empty() &&
+            !IsPageOrFrameType(scope_.target_type)) {
+          fields.emplace("sessionContext", Value::make_object({
+                                               {"notApplicable", Value(true)},
+                                           }));
+        } else {
+          std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
+          if (row.has_value()) {
+            fields.emplace(
+                "sessionContext",
+                Value::make_object({
+                    {"inBrowserUnion", Value(row->in_browser_union)},
+                    {"browserOnly", Value(row->browser_only)},
+                    {"conditional", Value(row->conditional)},
+                }));
+          }
         }
         return ValueHandle::make(Value::make_object(std::move(fields)));
       }
@@ -179,24 +212,50 @@ class CdpMirrorNode : public Handle {
     return ValueHandle::make_broken("unknown-message");
   }
 
-  // ACM-2: invoke through the HS-1 session layer, gated by the
-  // session-context rule (design section 2, NORMATIVE): the browser
-  // session's width is CLOSED — a domain absent from the derived closed
-  // union is the typed refusal NAMING the per-target path, never a raw CDP
-  // "wasn't found" passthrough. In-union commands dispatch; the host's own
-  // answer (result or error) passes through. The rows are ACM-S2's derived
-  // table — nothing here is hand-named.
+  // ACM-2/ACM-3: invoke through the HS-1 session layer, gated by the
+  // session-context rule (design section 2, NORMATIVE) — both directions
+  // typed redirects NAMING the correct path, never a raw CDP "wasn't
+  // found" passthrough from the wrong session. The rows are ACM-S2's
+  // derived table + the authored per-command overrides — nothing here is
+  // hand-named.
+  //  - Browser mirror: the width is CLOSED — a domain absent from the
+  //    derived union refuses naming targets/<id>/cdp/...
+  //  - Page/frame sub-mirror: the width is OPEN — only the DERIVED closed
+  //    browser-only set and the authored command overrides refuse (naming
+  //    the browser path cdp/...); everything else dispatches and the
+  //    host's own answer (result or error) passes through.
+  //  - Non-page sub-mirror: dispatch-and-pass-through, NO derived
+  //    refusals (round-8 — the session is self-describing by answer).
   std::shared_ptr<Handle> Invoke(const Value& spec) const {
     const CdpCatalog& cat = CdpCatalog::Get();
-    std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
-    if (!row.has_value() || !row->in_browser_union) {
-      return ValueHandle::make_broken(
-          "session-context: " + domain_ + "." + member_ +
-          " is not in the browser session's closed union; use targets/<id>/cdp/" +
-          domain_ + "/" + member_);
+    const std::string method = domain_ + "." + member_;
+    if (scope_.target_id.empty()) {
+      std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
+      if (!row.has_value() || !row->in_browser_union) {
+        return ValueHandle::make_broken(
+            "session-context: " + method +
+            " is not in the browser session's closed union; use "
+            "targets/<id>/cdp/" +
+            domain_ + "/" + member_);
+      }
+      return CdpSessionRegistry::Get().InvokeOnBrowserTarget(method, spec);
     }
-    return CdpSessionRegistry::Get().InvokeOnBrowserTarget(
-        domain_ + "." + member_, spec);
+    if (IsPageOrFrameType(scope_.target_type)) {
+      std::optional<CdpCatalog::ContextRow> row = cat.ContextFor(domain_);
+      if (row.has_value() && row->browser_only) {
+        return ValueHandle::make_broken(
+            "session-context: " + method + " is browser-only; use cdp/" +
+            domain_ + "/" + member_);
+      }
+      if (cat.OverrideContextFor(method).value_or("") == "browser-only") {
+        return ValueHandle::make_broken(
+            "session-context: " + method +
+            " is browser-only by per-command override; use cdp/" + domain_ +
+            "/" + member_);
+      }
+    }
+    return CdpSessionRegistry::Get().InvokeOnTarget(scope_.target_id, method,
+                                                    spec);
   }
 
   // Catalog-lookup navigation. Misses answer TYPED reasons; nodes are
@@ -209,17 +268,18 @@ class CdpMirrorNode : public Handle {
         if (!cat.FindDomain(name)) {
           return ValueHandle::make_broken("unknown-domain");
         }
-        return std::make_shared<CdpMirrorNode>(Kind::kDomain, name,
+        return std::make_shared<CdpMirrorNode>(Kind::kDomain, scope_, name,
                                                std::string());
       case Kind::kDomain:
         // No command/event name collides anywhere in the descriptor
         // (verified at ACM-1), so command-first lookup is total.
         if (cat.FindCommand(domain_, name)) {
-          return std::make_shared<CdpMirrorNode>(Kind::kCommand, domain_,
-                                                 name);
+          return std::make_shared<CdpMirrorNode>(Kind::kCommand, scope_,
+                                                 domain_, name);
         }
         if (cat.FindEvent(domain_, name)) {
-          return std::make_shared<CdpMirrorNode>(Kind::kEvent, domain_, name);
+          return std::make_shared<CdpMirrorNode>(Kind::kEvent, scope_, domain_,
+                                                 name);
         }
         return ValueHandle::make_broken("unknown-command-or-event");
       case Kind::kCommand:
@@ -230,6 +290,7 @@ class CdpMirrorNode : public Handle {
   }
 
   const Kind kind_;
+  const Scope scope_;
   const std::string domain_;
   const std::string member_;
   const Value identity_;
@@ -239,7 +300,17 @@ class CdpMirrorNode : public Handle {
 
 std::shared_ptr<velite::agentspaces::Handle> CreateCdpMirror() {
   return std::make_shared<CdpMirrorNode>(CdpMirrorNode::Kind::kCatalog,
-                                         std::string(), std::string());
+                                         CdpMirrorNode::Scope(), std::string(),
+                                         std::string());
+}
+
+std::shared_ptr<velite::agentspaces::Handle> CreateCdpMirrorForTarget(
+    const std::string& target_id,
+    const std::string& target_type) {
+  return std::make_shared<CdpMirrorNode>(
+      CdpMirrorNode::Kind::kCatalog,
+      CdpMirrorNode::Scope{target_id, target_type}, std::string(),
+      std::string());
 }
 
 }  // namespace aurelian

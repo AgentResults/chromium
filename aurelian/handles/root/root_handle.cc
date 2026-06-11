@@ -19,6 +19,7 @@
 #include "aurelian/handles/media/media_seam.h"
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/mirror/cdp_mirror.h"
+#include "aurelian/mirror/targets_mirror.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "velite/agentspaces-wire/handle.hpp"
@@ -228,6 +229,12 @@ class ChromeRootHandle : public Handle {
     if (policy_.Allows("cdp")) {
       cdp_ = CreateCdpMirror();
     }
+    // ACM-3: the targets mirror (the per-target session state lives in the
+    // process-global session registry; the root node is persistent per the
+    // same residency rule).
+    if (policy_.Allows("targets")) {
+      targets_ = CreateTargetsMirror();
+    }
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -265,6 +272,12 @@ class ChromeRootHandle : public Handle {
       }
       return cdp_;
     }
+    if (name == "targets") {
+      if (!policy_.Allows("targets") || !targets_) {
+        return ValueHandle::make_broken("out-of-scope");
+      }
+      return targets_;
+    }
     if (name == "system" || name == "tabs" || name == "gpu") {
       if (!policy_.Allows(name)) {
         return ValueHandle::make_broken("out-of-scope");
@@ -299,6 +312,9 @@ class ChromeRootHandle : public Handle {
   // Persistent CDP catalog mirror (legion://chrome/cdp), or null when
   // unsealed (ACM-1).
   std::shared_ptr<Handle> cdp_;
+  // Persistent targets mirror (legion://chrome/targets), or null when
+  // unsealed (ACM-3).
+  std::shared_ptr<Handle> targets_;
 };
 
 // Serializes a settled handle's reply to the federation-wire string form. The

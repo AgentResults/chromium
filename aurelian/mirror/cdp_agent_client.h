@@ -24,8 +24,9 @@ class CdpAgentClient {
  public:
   virtual ~CdpAgentClient() = default;
 
-  // Attaches the persistent client to the BROWSER target (one host, one
-  // client, until detach/close). False when the host refuses.
+  // Attaches the persistent client to its target (one host, one client,
+  // until detach/close). False when the host refuses or the target id
+  // resolves to no live host.
   virtual bool Attach() = 0;
   virtual bool attached() const = 0;
 
@@ -36,6 +37,15 @@ class CdpAgentClient {
   // thread) — replies and events alike; correlation is the session layer's.
   // `on_closed` fires once if the target closes under us.
   static std::unique_ptr<CdpAgentClient> CreateForBrowserTarget(
+      base::RepeatingCallback<void(const std::string&)> on_message,
+      base::OnceClosure on_closed);
+
+  // ACM-3: a persistent client on ONE enumerated target (page, tab,
+  // worker, …) — the id is DevToolsAgentHost::GetId()'s, i.e. an identity
+  // minted by the targets enumeration. Attach() resolves it via GetForId
+  // (hosts self-retain while their entity lives), false when stale.
+  static std::unique_ptr<CdpAgentClient> CreateForTargetId(
+      const std::string& target_id,
       base::RepeatingCallback<void(const std::string&)> on_message,
       base::OnceClosure on_closed);
 };

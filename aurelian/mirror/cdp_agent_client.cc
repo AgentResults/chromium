@@ -17,15 +17,20 @@ namespace aurelian {
 
 namespace {
 
-class BrowserTargetClient : public content::DevToolsAgentHostClient,
-                            public CdpAgentClient {
+// One persistent client on one target: the BROWSER target when
+// `target_id` is empty, otherwise the enumerated target the id names
+// (page, tab, worker, … — ACM-3).
+class AgentHostClient : public content::DevToolsAgentHostClient,
+                        public CdpAgentClient {
  public:
-  BrowserTargetClient(
-      base::RepeatingCallback<void(const std::string&)> on_message,
-      base::OnceClosure on_closed)
-      : on_message_(std::move(on_message)), on_closed_(std::move(on_closed)) {}
+  AgentHostClient(std::string target_id,
+                  base::RepeatingCallback<void(const std::string&)> on_message,
+                  base::OnceClosure on_closed)
+      : target_id_(std::move(target_id)),
+        on_message_(std::move(on_message)),
+        on_closed_(std::move(on_closed)) {}
 
-  ~BrowserTargetClient() override {
+  ~AgentHostClient() override {
     if (attached_) {
       host_->DetachClient(this);
     }
@@ -33,9 +38,16 @@ class BrowserTargetClient : public content::DevToolsAgentHostClient,
 
   // CdpAgentClient:
   bool Attach() override {
-    host_ = content::DevToolsAgentHost::CreateForBrowser(
-        /*tethering_task_runner=*/nullptr,
-        content::DevToolsAgentHost::CreateServerSocketCallback());
+    if (target_id_.empty()) {
+      host_ = content::DevToolsAgentHost::CreateForBrowser(
+          /*tethering_task_runner=*/nullptr,
+          content::DevToolsAgentHost::CreateServerSocketCallback());
+    } else {
+      // Hosts self-retain while their entity lives, so an id minted by the
+      // targets enumeration resolves here; a stale id (closed target) is a
+      // clean attach failure, never a crash.
+      host_ = content::DevToolsAgentHost::GetForId(target_id_);
+    }
     if (!host_) {
       return false;
     }
@@ -67,6 +79,7 @@ class BrowserTargetClient : public content::DevToolsAgentHostClient,
   bool IsTrusted() override { return true; }
 
  private:
+  const std::string target_id_;  // empty = the browser target
   base::RepeatingCallback<void(const std::string&)> on_message_;
   base::OnceClosure on_closed_;
   scoped_refptr<content::DevToolsAgentHost> host_;
@@ -79,8 +92,17 @@ class BrowserTargetClient : public content::DevToolsAgentHostClient,
 std::unique_ptr<CdpAgentClient> CdpAgentClient::CreateForBrowserTarget(
     base::RepeatingCallback<void(const std::string&)> on_message,
     base::OnceClosure on_closed) {
-  return std::make_unique<BrowserTargetClient>(std::move(on_message),
-                                               std::move(on_closed));
+  return std::make_unique<AgentHostClient>(std::string(), std::move(on_message),
+                                           std::move(on_closed));
+}
+
+// static
+std::unique_ptr<CdpAgentClient> CdpAgentClient::CreateForTargetId(
+    const std::string& target_id,
+    base::RepeatingCallback<void(const std::string&)> on_message,
+    base::OnceClosure on_closed) {
+  return std::make_unique<AgentHostClient>(target_id, std::move(on_message),
+                                           std::move(on_closed));
 }
 
 }  // namespace aurelian

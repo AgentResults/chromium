@@ -103,6 +103,21 @@ class CdpSession {
     return client_->Attach();
   }
 
+  // ACM-3: one persistent session per enumerated target.
+  bool AttachToTarget(const std::string& target_id) {
+    client_ = CdpAgentClient::CreateForTargetId(
+        target_id,
+        base::BindRepeating(&CdpSession::OnMessage, base::Unretained(this)),
+        base::BindOnce(&CdpSession::OnClosed, base::Unretained(this)));
+    return client_->Attach();
+  }
+
+  // Runs AFTER OnClosed settled the in-flight entries (the registry posts
+  // its prune from here — never erases a session mid-callback).
+  void set_on_closed(base::OnceClosure on_closed) {
+    on_closed_external_ = std::move(on_closed);
+  }
+
   bool attached() const { return client_ && client_->attached(); }
   size_t in_flight_count() const { return in_flight_.size(); }
 
@@ -180,11 +195,15 @@ class CdpSession {
       answer->SettleBroken("cdp-session-closed");
       CompletionBridge::Get().NotifySettled(answer);
     }
+    if (on_closed_external_) {
+      std::move(on_closed_external_).Run();
+    }
   }
 
   std::unique_ptr<CdpAgentClient> client_;
   int next_id_ = 1;
   std::map<int, std::shared_ptr<PendingCdpAnswer>> in_flight_;
+  base::OnceClosure on_closed_external_;
   base::WeakPtrFactory<CdpSession> weak_factory_{this};
 };
 
@@ -193,8 +212,11 @@ class CdpSession {
 struct CdpSessionRegistry::Impl {
   // The persistent browser-target session — lazily attached on the first
   // invoke (hosts are lightweight until attached; sessions attach lazily,
-  // design section 2). ACM-3 grows the per-page-target map beside it.
+  // design section 2).
   std::unique_ptr<CdpSession> browser_session;
+  // ACM-3: the persistent per-target sessions, keyed by the target id the
+  // enumeration minted. Lazy attach per target; pruned on target close.
+  std::map<std::string, std::unique_ptr<CdpSession>> target_sessions;
 };
 
 CdpSessionRegistry& CdpSessionRegistry::Get() {
@@ -219,13 +241,62 @@ std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnBrowserTarget(
   return impl_->browser_session->Invoke(method, params);
 }
 
+std::shared_ptr<Handle> CdpSessionRegistry::InvokeOnTarget(
+    const std::string& target_id,
+    const std::string& method,
+    const Value& params) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  auto it = impl_->target_sessions.find(target_id);
+  if (it == impl_->target_sessions.end() || !it->second->attached()) {
+    auto session = std::make_unique<CdpSession>();
+    if (!session->AttachToTarget(target_id)) {
+      // A stale id (the target closed) is a typed attach failure.
+      return ValueHandle::make_broken("cdp-attach-failed:no-such-target");
+    }
+    // Detach-on-target-close (design section 3): OnClosed settles the
+    // in-flight entries Broken synchronously, then this posts the prune —
+    // the dead client is erased in a LATER UI turn, never mid-callback.
+    session->set_on_closed(base::BindOnce([]() {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&CdpSessionRegistry::PruneClosedTargetSessions,
+                         base::Unretained(&CdpSessionRegistry::Get())));
+    }));
+    it = impl_->target_sessions.insert_or_assign(target_id,
+                                                 std::move(session))
+             .first;
+  }
+  return it->second->Invoke(method, params);
+}
+
+void CdpSessionRegistry::PruneClosedTargetSessions() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  std::erase_if(impl_->target_sessions,
+                [](const auto& entry) { return !entry.second->attached(); });
+}
+
 size_t CdpSessionRegistry::SessionCountForTesting() const {
   return impl_->browser_session && impl_->browser_session->attached() ? 1 : 0;
 }
 
 size_t CdpSessionRegistry::InFlightCountForTesting() const {
-  return impl_->browser_session ? impl_->browser_session->in_flight_count()
-                                : 0;
+  size_t n = impl_->browser_session
+                 ? impl_->browser_session->in_flight_count()
+                 : 0;
+  for (const auto& [id, session] : impl_->target_sessions) {
+    n += session->in_flight_count();
+  }
+  return n;
+}
+
+size_t CdpSessionRegistry::TargetSessionCountForTesting() const {
+  size_t n = 0;
+  for (const auto& [id, session] : impl_->target_sessions) {
+    if (session->attached()) {
+      ++n;
+    }
+  }
+  return n;
 }
 
 }  // namespace aurelian

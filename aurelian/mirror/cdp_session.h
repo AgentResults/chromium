@@ -51,10 +51,27 @@ class CdpSessionRegistry {
       const std::string& method,
       const velite::agentspaces::Value& params);
 
+  // ACM-3: same contract, on the PERSISTENT session of ONE enumerated
+  // target (the id is DevToolsAgentHost::GetId()'s) — lazy attach on the
+  // first invoke per target; detach-on-target-close settles that session's
+  // in-flight entries Broken and prunes the client (design section 3).
+  std::shared_ptr<velite::agentspaces::Handle> InvokeOnTarget(
+      const std::string& target_id,
+      const std::string& method,
+      const velite::agentspaces::Value& params);
+
+  // UI thread. Erases target sessions whose client detached (posted by the
+  // close path — never run mid-callback).
+  void PruneClosedTargetSessions();
+
   // The lazy-attach observables (plan ACM-2: the first invoke attaches the
   // browser session; one persistent session carries concurrent commands).
   size_t SessionCountForTesting() const;
   size_t InFlightCountForTesting() const;
+
+  // ACM-3 observable: attached PER-TARGET sessions (the browser session is
+  // not counted here). Detach-on-target-close drives this back to zero.
+  size_t TargetSessionCountForTesting() const;
 
  private:
   friend class base::NoDestructor<CdpSessionRegistry>;
