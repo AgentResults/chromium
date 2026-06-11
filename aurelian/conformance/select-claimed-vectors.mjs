@@ -163,23 +163,91 @@ if (rowless.length) {
 }
 console.log(`all ${entries.length} entries classified — remainder ∅`);
 
-// ---- Selection: claimed entries, minus pair-guard; disposition exclusions
-// already classified out above.
+// ---- The IMPL-DRIVING predicate (the CF-V amendment, design §3.3a-D5):
+// vector evidence binds to vectors whose ops the canonical runner DRIVES
+// AGAINST THE SPAWNED PEER. Derived from op-block-runner.js's own op
+// dispatch (runOp, lib/op-block-runner.js:231-361): a `call` is dispatchable
+// iff it is a "{ref}.method" handle/fixture call (REF_RE_DOT :364 — routed
+// to the spawned peer's session/slots), a `test.*` op (:356-358 — "each op
+// is an ask against the spawned peer subprocess"), or one of the bare ops
+// in the :246-353 switch — every non-local one of which launches or asks
+// the AGENTSPACES_PEER_CMD peer (Peer.new/Embodiment.new → launchPeer
+// :339; establishHandshake → launchPeerPair :271; rm.get/TestHandleClass.
+// define/Peer.getResourceManifest → session asks; actAs/TempFile.write are
+// pure local glue). Anything else throws `unsupported op` (:361) — those
+// vectors are HARNESS-VOCABULARY reference programs the runner never
+// implemented (the recorded upstream gap, design §9): their facets bind to
+// SCENARIO/PROBE evidence instead.
+const BARE_OPS = new Set([
+  'rm.get', 'actAs', 'establishHandshake', 'TestHandleClass.define',
+  'Peer.getResourceManifest', 'TempFile.write', 'Embodiment.new', 'Peer.new',
+]);
+function opCalls(text) {
+  return [...text.matchAll(/^\s*(?:- )?call:\s*"?([^"\n]+?)"?\s*$/gm)]
+    .map(m => m[1].trim());
+}
+function implDriving(text) {
+  const calls = opCalls(text);
+  if (!calls.length) return false;  // no op stream at all
+  return calls.every(c => /^\{[^}]+\}\./.test(c) || c.startsWith('test.') ||
+                          BARE_OPS.has(c));
+}
+function opBlockForm(text) {
+  // The runner only loads vectors with input + expected (loadVectors).
+  return /^input:/m.test(text) && /^expected:/m.test(text);
+}
+
+// ---- Selection: claimed entries, minus pair-guard, minus harness-
+// vocabulary, minus non-op-block-form; disposition exclusions already
+// classified out above. Every exclusion printed with its category.
 const PAIR = /establishHandshake|establishFederation/;
 const selected = [];
 const pairExcluded = [];
+const harnessVocab = [];
+const nonOpBlock = [];
 const seenFiles = new Set();
 for (const e of classified) {
   if (e.category !== 'claimed') continue;
   if (seenFiles.has(e.rel)) continue;  // one copy per file
   seenFiles.add(e.rel);
   if (PAIR.test(e.text)) pairExcluded.push(e);
+  else if (!opBlockForm(e.text)) nonOpBlock.push(e);
+  else if (!implDriving(e.text)) harnessVocab.push(e);
   else selected.push(e);
 }
-console.log(`selection: ${selected.length} claimed vectors ` +
-            `(pair-guard excluded ${pairExcluded.length} to CF-L2; ` +
+console.log(`selection: ${selected.length} IMPL-DRIVING claimed vectors ` +
+            `(pair-guard ${pairExcluded.length} -> CF-L2; ` +
+            `harness-vocabulary ${harnessVocab.length} -> scenario/probe ` +
+            `evidence (the §9 upstream runner gap); ` +
+            `non-op-block-form ${nonOpBlock.length}; ` +
             `disposition-excluded ${tally['disposition-excluded'] || 0})`);
 for (const e of pairExcluded) console.log(`  PAIR-GUARD -> CF-L2: ${e.rel}`);
+for (const e of harnessVocab) {
+  const bad = opCalls(e.text).filter(
+      c => !/^\{[^}]+\}\./.test(c) && !c.startsWith('test.') &&
+           !BARE_OPS.has(c));
+  console.log(`  HARNESS-VOCABULARY: ${e.rel}  [${e.facet}]  ` +
+              `ops: ${[...new Set(bad)].join(', ')}`);
+}
+for (const e of nonOpBlock) {
+  console.log(`  NON-OP-BLOCK-FORM: ${e.rel}  [${e.facet}]`);
+}
+
+// ---- The lane pin (Input B carries the expected impl-driving count as
+// DATA): a harness-internal vector misclassified as impl-driving moves the
+// count — exit non-zero. The mutation RED flips one vector's category in a
+// corpus COPY (the corpus itself is never edited).
+const pinMatch = B.match(/^expected-lane:\s*\{\s*impl-driving:\s*(\d+)\s*\}/m);
+if (pinMatch) {
+  const pin = Number(pinMatch[1]);
+  if (pin !== selected.length) {
+    console.error(`LANE-PIN MISMATCH: expected impl-driving=${pin}, ` +
+                  `computed ${selected.length} — a vector changed category ` +
+                  `(or the corpus moved); re-derive the table (§3.5(4)).`);
+    process.exit(4);
+  }
+  console.log(`lane pin: impl-driving=${pin} ✓`);
+}
 
 // ---- Copy into temp lanes (relative paths preserved).
 fs.rmSync(outRoot, { recursive: true, force: true });
@@ -196,5 +264,7 @@ fs.writeFileSync(path.join(outRoot, 'SELECTION.json'), JSON.stringify({
   census: { entries: entries.length, distinct: distinct.size },
   tally, selected: selected.map(e => ({ rel: e.rel, facet: e.facet })),
   pairExcluded: pairExcluded.map(e => e.rel),
+  harnessVocabulary: harnessVocab.map(e => ({ rel: e.rel, facet: e.facet })),
+  nonOpBlockForm: nonOpBlock.map(e => ({ rel: e.rel, facet: e.facet })),
 }, null, 2));
 console.log(`lanes: ${lanes.length} dirs under ${outRoot} (LANES.txt, SELECTION.json)`);

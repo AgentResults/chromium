@@ -22,6 +22,11 @@
 # mechanism (every queued single-peer vector runs and banks its outcome),
 # no assertion-by-proxy.
 
+# The lane pin (classifier-checked DATA): the expected impl-driving
+# selection under the amended §3.3a-D5 binding. A vector changing category
+# (or a corpus move) shifts the count -> the classifier exits non-zero.
+expected-lane: { impl-driving: 37 }
+
 meta:
   id: aurelian
   design: AURELIAN-CONFORMANT-FEDERATION-DESIGN.md §3.3b (Legion da18161e79)
@@ -38,8 +43,6 @@ claimed-wire:
   - sessions/wire-handshake
   - conduits/wire-at-least-one-declared
   # envelopes
-  - envelopes/canonical-signing-form
-  # L0 core
   - conformance/wire-bootstrap-surface
   - handles/wire-respond-to-ask
   - handles/wire-accept-tells
@@ -57,71 +60,36 @@ claimed-wire:
   - protocol/wire-drop-propagation
   - protocol/wire-drop-reason-disambiguates
   - protocol/wire-pipelining-buffer
-  - protocol/wire-round-trip-identity
-  - protocol/wire-nested-handle-depth
   - protocol/wire-placeholder-determined-fields
-  - protocol/wire-placeholder-redispatch-cross-as
-  - protocol/wire-substrate-retry-sequencing
   - protocol/wire-uri-derivation-pure
   # errors family (uncappable core)
   - errors/wire-audit-records-refusal
   - errors/wire-broken-state-carries-reason
-  - errors/wire-no-exceptions-on-wire
-  - errors/wire-propagation-pipeline
-  # handle-core family (uncappable core)
   - handles/wire-two-verbs
-  - handles/wire-verbs-one-way
   - handles/wire-no-throw
-  - handles/wire-reject-unknown-messages
   - handles/wire-reference-equality-identity
   - handles/wire-identity-immutable
   - handles/wire-hardened-at-construction
-  - handles/wire-schema-hardened
   - handles/wire-deterministic-dispatch
   - handles/wire-four-acquisition-rules
   - handles/wire-no-ambient-acquisition
   - handles/wire-no-ambient-state-read
-  - handles/wire-no-extra-reserved-names
-  - handles/wire-no-value-equality-fallback
-  - handles/wire-internal-names-no-cross-boundary
-  - handles/wire-multi-shot-reserved
-  - handles/wire-methodmetadata-direct-ask-tell
-  - handles/wire-contract-bearing
-  - handles/wire-authorised-settler-only
-  # handles introspection + area
-  - handles
   - handles/contract-introspection
-  - handles/post-tell-ask-refactor
   - handles/wire-__getType
   - handles/wire-__getSchema
   # agentspace
   - agentspace/wire-bootstrap-handle-at-slot-0
   - agentspace/wire-revocation-cascades
   # kg (build-conditioned: compiled kg facility)
-  - kg/crud
-  - kg/wire-content-addressed-facts
   - kg/wire-fact-content-addressed
-  - kg/wire-fact-sig-verify
   - kg/wire-prototype-frozen
   - kg/wire-restore-preserves-prototype
   - kg/wire-kgnode-reserved-messages
-  - kg/wire-methodmetadata-direct-invocation
-  - kg/wire-methodmetadata-vs-legion-update-disjoint
-  - kg/wire-subscription-replay
-  - kg/wire-search-hook            # disposition-gated §3.3c-4
-  - kg/declarative-type-creation   # disposition-gated §3.3c-4
   - kg/typed-handle-prototype
   - kg/wire-query                  # V=0: named CF-V wire probe
   # query (rides the kg facility)
-  - query/subsumption-typed
-  - query/grammar
-  - query/projection-capability
-  - query/update-atomic
-  - query/wire-successor-specification
-  # provenance (rides the kg fact store)
   - provenance/wire-fact-provenance-fields   # V=0: named CF-V wire probe
   - provenance/wire-freshness-modes          # V=0: named CF-V wire probe
-  - provenance/wire-identifies-relation      # disposition-gated §3.3c-5
   # subscribe
   - subscribe/wire-streaming
   # ontology (build-conditioned: compiled ontology facility)
@@ -132,24 +100,15 @@ claimed-wire:
   - ontology/wire-procedural-relations-present
   - ontology/wire-relation-domain-range-enforced
   - ontology/wire-entity-prototype-is-type
-  - ontology/wire-dag-except-root-selfloops
   - ontology/wire-prototype-frozen-at-construction
-  - ontology/typehandle-singleton
-  # discovery
   - discovery/wire-catalog
   - discovery/catalog
   - discovery/wire-get
-  - discovery/wire-getResource
   - discovery/wire-bootstrap-handle-canonical-surface
   - discovery/wire-one-resolver-slot-0
-  - discovery/no-ambient-discovery
-  # observability
   - observability/wire-audit-log-entries
   - observability/wire-canonical-span-names
   - observability/wire-discipline-bundle
-  - observability/span-emission
-  - observability/audit-event-extension
-  # resources (acquisition/materialiser surface; build-conditioned)
   - resources/materialiser
   - resources/wire-materializer-typed
   - resources/wire-dependency-walk
@@ -159,7 +118,6 @@ claimed-wire:
   - local-resources/wire-schema-declaration
   - local-resources/wire-capability-scoped-getresource
   - local-resources/wire-native-error-mapping
-  - local-resources/wire-resource-queryable-as-kg-entity  # rides kg
   # federation (registry surface only; cross-org queued below)
   - federation/peer-registry
   - federation
@@ -177,12 +135,7 @@ claimed-internal:
   - agentspace/internal-single-threaded-dispatch
   - agentspace/internal-audit-log
   - embodiment/internal-operator-config-typed
-  - ontology/internal-bootstrap-types
   - ontology/internal-no-parallel-subsumption-index
-  - ontology/internal-procedural-relation-subsumption
-  - kg/internal-subscription-index
-
-# === QUEUED (sliceRef named; surface CAPPED until the flip) ===
 queued:
   # CF-L2 — TLS peer-pair lane (launchPeerPair scenarios + cross-org verbs)
   - { facet: federation/wire-four-gate-on-resource-export, sliceRef: CF-L2 }
@@ -259,6 +212,191 @@ queued:
   - { facet: kg/persistence, sliceRef: CF-V-mandatory,
       note: expected red — fresh-per-spawn (§1.3) }
   - { facet: query/subscribe-filter-reeval, sliceRef: CF-V-mandatory }
+
+  # --- CF-V AMENDMENT DOWNGRADES (2026-06-11, the impl-driving evidence
+  # binding; orchestrator-approved): 43 rows whose ONLY §3.3b evidence was
+  # vectors now classified harness-vocabulary (the canonical runner cannot
+  # drive their ops against a spawned peer — the recorded upstream gap) or
+  # non-op-block-form. Downgraded claimed → queued, sliceRef CF-RV (the
+  # focused re-review): each re-claims when (a) the re-review sanctions a
+  # scenario-evidence citation, (b) an impl-driving probe is banked, or
+  # (c) upstream lands runner support. RECORDED TENSION for the reviewer:
+  # the dispatcher-core subset (protocol/errors/handle-core rows below) is
+  # UNCAPPABLE — their surface still exhibits, so claim ⟺ exhibit holds
+  # only once they are re-claimed on sanctioned evidence or the manifest
+  # question is ruled on. NO silent change — every row named here.
+  - { facet: envelopes/canonical-signing-form, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: protocol/wire-round-trip-identity, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: protocol/wire-nested-handle-depth, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: protocol/wire-placeholder-redispatch-cross-as, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: protocol/wire-substrate-retry-sequencing, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: errors/wire-no-exceptions-on-wire, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: errors/wire-propagation-pipeline, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-verbs-one-way, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-reject-unknown-messages, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-schema-hardened, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-no-extra-reserved-names, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-no-value-equality-fallback, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-internal-names-no-cross-boundary, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-multi-shot-reserved, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-methodmetadata-direct-ask-tell, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-contract-bearing, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/wire-authorised-settler-only, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: handles/post-tell-ask-refactor, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/crud, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/wire-content-addressed-facts, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/wire-fact-sig-verify, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/wire-methodmetadata-direct-invocation, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/wire-methodmetadata-vs-legion-update-disjoint, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/wire-subscription-replay, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/wire-search-hook, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/declarative-type-creation, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: query/subsumption-typed, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: query/grammar, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: query/projection-capability, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: query/update-atomic, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: query/wire-successor-specification, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: provenance/wire-identifies-relation, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: ontology/wire-dag-except-root-selfloops, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: ontology/typehandle-singleton, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: discovery/wire-getResource, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: discovery/no-ambient-discovery, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: observability/span-emission, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: observability/audit-event-extension, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: local-resources/wire-resource-queryable-as-kg-entity, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: ontology/internal-bootstrap-types, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: ontology/internal-procedural-relation-subsumption, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
+  - { facet: kg/internal-subscription-index, sliceRef: CF-RV,
+      note: CF-V amendment downgrade — sole V(f) evidence was
+        harness-vocabulary/non-op-block (the §9 upstream runner gap);
+        no scenario/probe evidence cited in §3.3b }
 
 # === NOT CLAIMED (each with its recorded ground) ===
 not-claimed:

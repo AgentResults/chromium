@@ -51,9 +51,8 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "identity/wire-ed25519");
     Add(&v, "sessions/wire-handshake");
     Add(&v, "conduits/wire-at-least-one-declared");
-    // --- Envelopes (the corpus routes the signing-form vectors here).
-    Add(&v, "envelopes/canonical-signing-form");
-    // --- L0 core.
+    // --- L0 core. (envelopes/canonical-signing-form: CF-V amendment
+    // downgrade — queued CF-RV, see the draft YAML.)
     Add(&v, "conformance/wire-bootstrap-surface");
     Add(&v, "handles/wire-respond-to-ask");
     Add(&v, "handles/wire-accept-tells");
@@ -64,49 +63,34 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "handoff");
     Add(&v, "protocol/wire-slot-lifecycle");
     Add(&v, "errors/wire-typed-tree");
-    // --- Dispatcher-core protocol family (12; §3.3b — uncappable core:
-    // closure branch 1 treats a red as a DEFECT, never a downgrade).
+    // --- Dispatcher-core protocol family (§3.3b, uncappable core; the
+    // CF-V amendment downgraded 4 of the 12 to queued CF-RV — named in
+    // the draft YAML; the recorded exhibit tension is the focused
+    // re-review's question).
     Add(&v, "protocol/wire-slot-zero-bootstrap");
     Add(&v, "protocol/wire-close-and-disconnect-settle");
     Add(&v, "protocol/wire-close-cascade");
     Add(&v, "protocol/wire-drop-propagation");
     Add(&v, "protocol/wire-drop-reason-disambiguates");
     Add(&v, "protocol/wire-pipelining-buffer");
-    Add(&v, "protocol/wire-round-trip-identity");
-    Add(&v, "protocol/wire-nested-handle-depth");
     Add(&v, "protocol/wire-placeholder-determined-fields");
-    Add(&v, "protocol/wire-placeholder-redispatch-cross-as");
-    Add(&v, "protocol/wire-substrate-retry-sequencing");
     Add(&v, "protocol/wire-uri-derivation-pure");
-    // --- Errors family (4; uncappable core).
+    // --- Errors family (uncappable core; 2 of 4 downgraded CF-RV).
     Add(&v, "errors/wire-audit-records-refusal");
     Add(&v, "errors/wire-broken-state-carries-reason");
-    Add(&v, "errors/wire-no-exceptions-on-wire");
-    Add(&v, "errors/wire-propagation-pipeline");
-    // --- Handle-core family (19, handles/v0.14; uncappable core).
+    // --- Handle-core family (handles/v0.14, uncappable core; 10 of 19
+    // downgraded CF-RV — named in the draft YAML).
     Add(&v, "handles/wire-two-verbs");
-    Add(&v, "handles/wire-verbs-one-way");
     Add(&v, "handles/wire-no-throw");
-    Add(&v, "handles/wire-reject-unknown-messages");
     Add(&v, "handles/wire-reference-equality-identity");
     Add(&v, "handles/wire-identity-immutable");
     Add(&v, "handles/wire-hardened-at-construction");
-    Add(&v, "handles/wire-schema-hardened");
     Add(&v, "handles/wire-deterministic-dispatch");
     Add(&v, "handles/wire-four-acquisition-rules");
     Add(&v, "handles/wire-no-ambient-acquisition");
     Add(&v, "handles/wire-no-ambient-state-read");
-    Add(&v, "handles/wire-no-extra-reserved-names");
-    Add(&v, "handles/wire-no-value-equality-fallback");
-    Add(&v, "handles/wire-internal-names-no-cross-boundary");
-    Add(&v, "handles/wire-multi-shot-reserved");
-    Add(&v, "handles/wire-methodmetadata-direct-ask-tell");
-    Add(&v, "handles/wire-contract-bearing");
-    Add(&v, "handles/wire-authorised-settler-only");
     // --- Handles introspection + area.
-    Add(&v, "handles");
     Add(&v, "handles/contract-introspection");
-    Add(&v, "handles/post-tell-ask-refactor");
     Add(&v, "handles/wire-__getType");
     Add(&v, "handles/wire-__getSchema");
     // --- Agentspace.
@@ -115,30 +99,16 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
 #if defined(AURELIAN_CLAIMS_HAS_KG)
     // --- kg (rides the compiled kg facility; VELITE_WIRE_HAS_KG lights the
     // factory from the same header this gate checks).
-    Add(&v, "kg/crud");
-    Add(&v, "kg/wire-content-addressed-facts");
     Add(&v, "kg/wire-fact-content-addressed");
-    Add(&v, "kg/wire-fact-sig-verify");
     Add(&v, "kg/wire-prototype-frozen");
     Add(&v, "kg/wire-restore-preserves-prototype");
     Add(&v, "kg/wire-kgnode-reserved-messages");
-    Add(&v, "kg/wire-methodmetadata-direct-invocation");
-    Add(&v, "kg/wire-methodmetadata-vs-legion-update-disjoint");
-    Add(&v, "kg/wire-subscription-replay");
-    Add(&v, "kg/wire-search-hook");          // disposition-gated, §3.3c-4
-    Add(&v, "kg/declarative-type-creation");  // disposition-gated, §3.3c-4
     Add(&v, "kg/typed-handle-prototype");
     Add(&v, "kg/wire-query");
-    // --- query (the legion-query engine rides the kg facility).
-    Add(&v, "query/subsumption-typed");
-    Add(&v, "query/grammar");
-    Add(&v, "query/projection-capability");
-    Add(&v, "query/update-atomic");
-    Add(&v, "query/wire-successor-specification");
-    // --- provenance (fact provenance rides the kg fact store).
+    // --- provenance (rides the kg fact store; the query/* five and
+    // provenance/wire-identifies-relation downgraded CF-RV).
     Add(&v, "provenance/wire-fact-provenance-fields");
     Add(&v, "provenance/wire-freshness-modes");
-    Add(&v, "provenance/wire-identifies-relation");  // §3.3c-5
     // --- subscribe (the vendored KG wire-streaming trio; the chrome event
     // surface joins at CF-5).
     Add(&v, "subscribe/wire-streaming");
@@ -152,24 +122,18 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "ontology/wire-procedural-relations-present");
     Add(&v, "ontology/wire-relation-domain-range-enforced");
     Add(&v, "ontology/wire-entity-prototype-is-type");
-    Add(&v, "ontology/wire-dag-except-root-selfloops");
     Add(&v, "ontology/wire-prototype-frozen-at-construction");
-    Add(&v, "ontology/typehandle-singleton");
 #endif  // AURELIAN_CLAIMS_HAS_ONTOLOGY
     // --- discovery (the slot-0 resolver surface — §4.1's one mount table).
     Add(&v, "discovery/wire-catalog");
     Add(&v, "discovery/catalog");
     Add(&v, "discovery/wire-get");
-    Add(&v, "discovery/wire-getResource");
     Add(&v, "discovery/wire-bootstrap-handle-canonical-surface");
     Add(&v, "discovery/wire-one-resolver-slot-0");
-    Add(&v, "discovery/no-ambient-discovery");
     // --- observability.
     Add(&v, "observability/wire-audit-log-entries");
     Add(&v, "observability/wire-canonical-span-names");
     Add(&v, "observability/wire-discipline-bundle");
-    Add(&v, "observability/span-emission");
-    Add(&v, "observability/audit-event-extension");
 #if defined(AURELIAN_CLAIMS_HAS_RESOURCES)
     // --- resources (the acquisition/materialiser surface CF-7 proves; the
     // publish/install store family stays queued CF-EXT + capped).
@@ -187,9 +151,6 @@ const std::vector<std::string>& aurelian_claimed_wire_facets() {
     Add(&v, "local-resources/wire-schema-declaration");
     Add(&v, "local-resources/wire-capability-scoped-getresource");
     Add(&v, "local-resources/wire-native-error-mapping");
-#if defined(AURELIAN_CLAIMS_HAS_KG)
-    Add(&v, "local-resources/wire-resource-queryable-as-kg-entity");
-#endif
     // --- federation (the registry surface L0-core 05 drives; the cross-org
     // sub-facets stay queued CF-L2 + capped).
     Add(&v, "federation/peer-registry");
@@ -215,12 +176,9 @@ const std::vector<std::string>& aurelian_claimed_internal_facets() {
     Add(&v, "agentspace/internal-audit-log");
     Add(&v, "embodiment/internal-operator-config-typed");
 #if defined(AURELIAN_CLAIMS_HAS_ONTOLOGY)
-    Add(&v, "ontology/internal-bootstrap-types");
     Add(&v, "ontology/internal-no-parallel-subsumption-index");
-    Add(&v, "ontology/internal-procedural-relation-subsumption");
 #endif
 #if defined(AURELIAN_CLAIMS_HAS_KG)
-    Add(&v, "kg/internal-subscription-index");
 #endif
     return v;
   }());
