@@ -20,6 +20,7 @@
 #include "aurelian/membrane/embodiment_policy.h"
 #include "aurelian/mirror/cdp_mirror.h"
 #include "aurelian/mirror/prefs_mirror.h"
+#include "aurelian/mirror/services_mirror.h"
 #include "aurelian/mirror/targets_mirror.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -241,6 +242,10 @@ class ChromeRootHandle : public Handle {
     if (policy_.Allows("prefs")) {
       prefs_ = CreatePrefsMirror();
     }
+    // ACM-6: the services catalog (catalog-only — design section 8).
+    if (policy_.Allows("services")) {
+      services_ = CreateServicesMirror();
+    }
   }
 
   StateKind state_kind() const override { return StateKind::ResolvedValue; }
@@ -290,6 +295,12 @@ class ChromeRootHandle : public Handle {
       }
       return prefs_;
     }
+    if (name == "services") {
+      if (!policy_.Allows("services") || !services_) {
+        return ValueHandle::make_broken("out-of-scope");
+      }
+      return services_;
+    }
     if (name == "system" || name == "tabs" || name == "gpu") {
       if (!policy_.Allows(name)) {
         return ValueHandle::make_broken("out-of-scope");
@@ -330,6 +341,9 @@ class ChromeRootHandle : public Handle {
   // Persistent prefs mirror (legion://chrome/prefs), or null when
   // unsealed (ACM-5).
   std::shared_ptr<Handle> prefs_;
+  // Persistent services catalog (legion://chrome/services), or null when
+  // unsealed (ACM-6).
+  std::shared_ptr<Handle> services_;
 };
 
 // Serializes a settled handle's reply to the federation-wire string form. The

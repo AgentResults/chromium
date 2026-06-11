@@ -335,6 +335,33 @@ if (enable_aurelian) {
     configs += [ "//build/config/compiler:rtti" ]
   }
 
+  # ACM-6: the services catalog — the KeyedServiceFactory dependency graph
+  # enumerated through the one-line additive production accessor on
+  # DependencyManager (the recorded section-7 fork-delta line). CATALOG-ONLY:
+  # invoke answers the typed no-invoke-surface refusal. RTTI (Velite handles).
+  source_set("aurelian_services_mirror") {
+    sources = [
+      "mirror/services_mirror.cc",
+      "mirror/services_mirror.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/keyed_service/content",
+      "//components/keyed_service/core",
+      "//velite",
+    ]
+
+    include_dirs = _velite_include_dirs
+
+    configs -= [
+      "//build/config/compiler:no_rtti",
+      "//build/config/clang:find_bad_constructs",
+      "//build/config/clang:unsafe_buffers",
+    ]
+    configs += [ "//build/config/compiler:rtti" ]
+  }
+
   # Navigable legion://chrome/ root handle (reachable-from-root). RTTI (Velite).
   source_set("aurelian_root") {
     sources = [
@@ -345,6 +372,7 @@ if (enable_aurelian) {
     deps = [
       ":aurelian_cdp_mirror",
       ":aurelian_prefs_mirror",
+      ":aurelian_services_mirror",
       ":aurelian_targets_mirror",
       ":aurelian_embodiment_policy",
       ":aurelian_gpu",
@@ -1306,6 +1334,7 @@ if (enable_aurelian) {
       "mirror/cdp_mirror_browsertest.cc",
       "mirror/cdp_session_browsertest.cc",
       "mirror/prefs_mirror_browsertest.cc",
+      "mirror/services_mirror_browsertest.cc",
       "mirror/targets_mirror_browsertest.cc",
       "handles/browser/screenshot_handle_browsertest.cc",
       "handles/browser/system_handle_browsertest.cc",
@@ -1375,6 +1404,7 @@ if (enable_aurelian) {
       "//components/download/public/common:public",
       "//components/history/core/browser",
       "//components/history/core/test",
+      "//components/keyed_service/content",
       "//components/keyed_service/core",
       "//content/public/browser",
       "//content/test:test_support",

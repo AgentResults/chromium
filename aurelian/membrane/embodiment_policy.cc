@@ -27,9 +27,9 @@ EmbodimentPolicy EmbodimentPolicy::FullStandalone() {
   // The capabilities the legion://chrome/ root mounts as children. Kept in
   // sync with ChromeRootHandle's mountable set (root_handle.cc). Per-slice
   // growth (AURELIAN-GENERIC-CONTROL-DESIGN section 7): ACM-1 added `cdp`;
-  // ACM-3 added `targets`; ACM-5 added `prefs`.
-  return WithCapabilities(
-      {"system", "tabs", "gpu", "media", "cdp", "targets", "prefs"});
+  // ACM-3 added `targets`; ACM-5 added `prefs`; ACM-6 added `services`.
+  return WithCapabilities({"system", "tabs", "gpu", "media", "cdp", "targets",
+                           "prefs", "services"});
 }
 
 bool EmbodimentPolicy::Allows(const std::string& name) const {
