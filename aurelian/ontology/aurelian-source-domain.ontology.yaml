@@ -1,0 +1,184 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# Aurelian source-domain ontology (ACM-7, AURELIAN-GENERIC-CONTROL-DESIGN
+# section 6). Layer-1 types the mirror projectors stamp via __getType, each
+# IDENTIFIES one of the Layer-3 canonical targets Vitruvius uses.
+#
+# THE AUTHORED SET IS DERIVED FROM WHAT THE CODE STAMPS, not from the design
+# section-6 list verbatim (Phase-A review F2, orchestrator-confirmed): the
+# collection-root types the shipped mirror stamps (CdpCatalog, ChromeTargets,
+# ChromePreferences, ChromeServices) are declared alongside the per-node
+# types, and AXControl — named in section 6 but stamped by NO projector (the
+# AX tree is reached through CdpCommand nodes: Accessibility.* + DOM.*/
+# Input.* inside the CDP mirror) — is deliberately NOT declared. The
+# consistency audit enforces BOTH directions (an undeclared stamp fails the
+# build; a declared-but-never-stamped type fails the build), so this file
+# cannot drift from the code in either direction.
+#
+# Parsed by ontology/ontology_lib.py (strict two-space-indent subset; no
+# pyyaml in the GN action environment).
+
+version: 1
+embodiment: aurelian
+
+# Layer-3 canonical targets (the same vocabulary Vitruvius uses).
+canonical:
+  - legion://types/Catalog
+  - legion://types/Operation
+  - legion://types/Setting
+  - legion://types/Service
+  - legion://types/UIControl
+
+# Layer-1 source-domain types -> IDENTIFIES -> Layer-3 canonical target.
+# stamped_by names the ONE projector file carrying the constexpr stamp; the
+# consistency audit verifies it against the scan (no silent drift).
+types:
+  legion://types/CdpCatalog:
+    identifies: legion://types/Catalog
+    stamped_by: mirror/cdp_mirror.cc
+  legion://types/CdpDomain:
+    identifies: legion://types/Catalog
+    stamped_by: mirror/cdp_mirror.cc
+  legion://types/CdpCommand:
+    identifies: legion://types/Operation
+    stamped_by: mirror/cdp_mirror.cc
+  legion://types/CdpEvent:
+    # The observable half of a domain's operation surface (subscribe is the
+    # verb); the five-target canonical vocabulary has no Event.
+    identifies: legion://types/Operation
+    stamped_by: mirror/cdp_mirror.cc
+  legion://types/ChromeTargets:
+    identifies: legion://types/Catalog
+    stamped_by: mirror/targets_mirror.cc
+  legion://types/ChromeTarget:
+    # An attachable CDP session endpoint (page, tab, worker, service worker —
+    # the node carries the host's target type); of the canonical five,
+    # Service is what every target kind has in common.
+    identifies: legion://types/Service
+    stamped_by: mirror/targets_mirror.cc
+  legion://types/ChromePreferences:
+    identifies: legion://types/Catalog
+    stamped_by: mirror/prefs_mirror.cc
+  legion://types/ChromePreference:
+    identifies: legion://types/Setting
+    stamped_by: mirror/prefs_mirror.cc
+  legion://types/ChromeServices:
+    identifies: legion://types/Catalog
+    stamped_by: mirror/services_mirror.cc
+  legion://types/ChromeService:
+    identifies: legion://types/Service
+    stamped_by: mirror/services_mirror.cc
+
+# Every name the sealed root mounts (root_handle.cc ask_impl dispatch ==
+# EmbodimentPolicy::FullStandalone rows — the surface-coverage audit checks
+# the three-way equality). kind projector = mirror-owned; kind facade =
+# bespoke convenience surface whose section-7 disposition lands at ACM-R.
+roots:
+  cdp:
+    kind: projector
+    projector: CdpMirror
+    factory: CreateCdpMirror
+    host_structure: cdp-descriptor
+    files:
+      - mirror/cdp_mirror.cc
+      - mirror/cdp_mirror.h
+      - mirror/cdp_session.cc
+      - mirror/cdp_session.h
+      - mirror/cdp_agent_client.cc
+      - mirror/cdp_agent_client.h
+      - mirror/value_convert.cc
+      - mirror/value_convert.h
+  targets:
+    kind: projector
+    projector: TargetsMirror
+    factory: CreateTargetsMirror
+    host_structure: targets
+    files:
+      - mirror/targets_mirror.cc
+      - mirror/targets_mirror.h
+  prefs:
+    kind: projector
+    projector: PrefsMirror
+    factory: CreatePrefsMirror
+    host_structure: prefs-registry
+    files:
+      - mirror/prefs_mirror.cc
+      - mirror/prefs_mirror.h
+  services:
+    kind: projector
+    projector: ServicesMirror
+    factory: CreateServicesMirror
+    host_structure: keyed-services-graph
+    files:
+      - mirror/services_mirror.cc
+      - mirror/services_mirror.h
+  system:
+    kind: facade
+    disposition: pending-ACM-R
+    files:
+      - handles/root/root_handle.cc
+      - handles/browser/system_handle.cc
+      - handles/browser/system_handle.h
+  tabs:
+    kind: facade
+    disposition: pending-ACM-R
+    files:
+      - handles/root/root_handle.cc
+      - handles/browser/tabs_overview.cc
+      - handles/browser/tabs_overview.h
+      - handles/browser/tabstrip_handle.cc
+      - handles/browser/tabstrip_handle.h
+  gpu:
+    kind: facade
+    disposition: pending-ACM-R
+    files:
+      - handles/root/root_handle.cc
+      - handles/browser/gpu_handle.cc
+      - handles/browser/gpu_handle.h
+  media:
+    kind: facade
+    disposition: pending-ACM-R
+    files:
+      - handles/media/media_handles.cc
+      - handles/media/media_handles.h
+
+# HOST-side correspondence (design section 6, round-5 review M7): every
+# Chromium self-describing structure family — enumerated with its host
+# anchor in host_correspondence_audit.py — maps to a projector or carries a
+# recorded out-of-scope reason, revisited per roll. Deleting a row while the
+# family still exists at the host FAILS the build.
+correspondence:
+  cdp-descriptor:
+    status: mapped
+    projector: CdpMirror
+  prefs-registry:
+    status: mapped
+    projector: PrefsMirror
+  targets:
+    status: mapped
+    projector: TargetsMirror
+  keyed-services-graph:
+    status: mapped
+    projector: ServicesMirror
+    note: catalog-only — invoke is the typed no-invoke-surface refusal (design section 2 tier 2)
+  ax-tree:
+    status: covered-via
+    projector: CdpMirror
+    note: Accessibility.* + DOM.*/Input.* inside the CDP mirror — no separate projector, no AXControl stamp
+  features-flags-registry:
+    status: out-of-scope
+    reason: base::Feature/FeatureList enumerates compile-time flags; mutation needs process restart semantics the mirror does not model in v1
+  mojo-interface-broker:
+    status: out-of-scope
+    reason: the broker binds typed mojo pipes, not a reflective catalog; no schema-carrying enumeration surface exists to project in v1
+  command-line-switches:
+    status: out-of-scope
+    reason: process-launch-frozen key/value strings; read-only after boot and untyped — no live control surface to mirror in v1
+  histograms-registry:
+    status: out-of-scope
+    reason: telemetry observation, not browser control; volume (tens of thousands of histograms) without verbs makes it catalog noise in v1
+  extensions-registry:
+    status: out-of-scope
+    reason: extensions surface rides the bespoke extensions_handle pending its section-7 ACM-R disposition; revisit when that row is decided

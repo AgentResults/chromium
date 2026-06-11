@@ -370,6 +370,13 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      # ACM-7: the three ontology audits gate the composition root, so no
+      # binary links the mirror without the binding holding (design
+      # section 6).
+      ":aurelian_host_correspondence_audit",
+      ":aurelian_ontology_consistency_audit",
+      ":aurelian_surface_coverage_audit",
+
       ":aurelian_cdp_mirror",
       ":aurelian_prefs_mirror",
       ":aurelian_services_mirror",
@@ -1277,6 +1284,125 @@ if (enable_aurelian) {
       rebase_path("catalog/session_context_table.json", root_build_dir),
       "--stamp",
       rebase_path("$target_gen_dir/catalog/session_context_audit.stamp",
+                  root_build_dir),
+    ]
+    deps = [ "//third_party/blink/public/devtools_protocol:protocol_version" ]
+  }
+
+  # ACM-7 audit 1 - acm-ontology-consistency (design section 6): every
+  # legion://types/ stamp in the projector/facade sources declared, every
+  # declared type stamped (Phase-A review F2 both-directions discipline)
+  # and IDENTIFIES a declared canonical target.
+  action("aurelian_ontology_consistency_audit") {
+    script = "ontology/ontology_consistency_audit.py"
+    inputs = [
+      "ontology/ontology_lib.py",
+      "ontology/aurelian-source-domain.ontology.yaml",
+
+      # The scan scope - the union of the ontology roots rows' files.
+      "mirror/cdp_mirror.cc",
+      "mirror/cdp_mirror.h",
+      "mirror/cdp_session.cc",
+      "mirror/cdp_session.h",
+      "mirror/cdp_agent_client.cc",
+      "mirror/cdp_agent_client.h",
+      "mirror/value_convert.cc",
+      "mirror/value_convert.h",
+      "mirror/targets_mirror.cc",
+      "mirror/targets_mirror.h",
+      "mirror/prefs_mirror.cc",
+      "mirror/prefs_mirror.h",
+      "mirror/services_mirror.cc",
+      "mirror/services_mirror.h",
+      "handles/root/root_handle.cc",
+      "handles/browser/system_handle.cc",
+      "handles/browser/system_handle.h",
+      "handles/browser/tabs_overview.cc",
+      "handles/browser/tabs_overview.h",
+      "handles/browser/tabstrip_handle.cc",
+      "handles/browser/tabstrip_handle.h",
+      "handles/browser/gpu_handle.cc",
+      "handles/browser/gpu_handle.h",
+      "handles/media/media_handles.cc",
+      "handles/media/media_handles.h",
+    ]
+    outputs = [ "$target_gen_dir/ontology_consistency_audit.stamp" ]
+    args = [
+      "--src-root",
+      rebase_path("//", root_build_dir),
+      "--ontology",
+      rebase_path("ontology/aurelian-source-domain.ontology.yaml",
+                  root_build_dir),
+      "--stamp",
+      rebase_path("$target_gen_dir/ontology_consistency_audit.stamp",
+                  root_build_dir),
+    ]
+  }
+
+  # ACM-7 audit 2 - acm-surface-coverage (design section 6): mounted set ==
+  # EmbodimentPolicy rows == ontology roots rows (projector or recorded
+  # facade), plus the generated wiring-map drift check.
+  action("aurelian_surface_coverage_audit") {
+    script = "ontology/surface_coverage_audit.py"
+    inputs = [
+      "ontology/ontology_lib.py",
+      "ontology/aurelian-source-domain.ontology.yaml",
+      "ontology/AURELIAN-WIRING-MAP.md",
+      "handles/root/root_handle.cc",
+      "membrane/embodiment_policy.cc",
+      "mirror/cdp_mirror.cc",
+      "mirror/targets_mirror.cc",
+      "mirror/prefs_mirror.cc",
+      "mirror/services_mirror.cc",
+    ]
+    outputs = [ "$target_gen_dir/surface_coverage_audit.stamp" ]
+    args = [
+      "--src-root",
+      rebase_path("//", root_build_dir),
+      "--ontology",
+      rebase_path("ontology/aurelian-source-domain.ontology.yaml",
+                  root_build_dir),
+      "--map",
+      rebase_path("ontology/AURELIAN-WIRING-MAP.md", root_build_dir),
+      "--stamp",
+      rebase_path("$target_gen_dir/surface_coverage_audit.stamp",
+                  root_build_dir),
+    ]
+  }
+
+  # ACM-7 audit 3 - the HOST-side correspondence audit (design section 6,
+  # round-5 review M7): every host self-describing structure family ->
+  # projector or recorded out-of-scope row, each family pinned to a live
+  # host anchor; the descriptor leg re-parses per build (auto-grows with
+  # every roll).
+  action("aurelian_host_correspondence_audit") {
+    script = "ontology/host_correspondence_audit.py"
+    inputs = [
+      "ontology/ontology_lib.py",
+      "ontology/aurelian-source-domain.ontology.yaml",
+      "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json",
+      "//components/prefs/pref_service.h",
+      "//content/public/browser/devtools_agent_host.h",
+      "//components/keyed_service/core/dependency_manager.h",
+      "//base/feature_list.h",
+      "//third_party/blink/public/mojom/browser_interface_broker.mojom",
+      "//base/command_line.h",
+      "//base/metrics/histogram.h",
+      "//extensions/browser/extension_registry.h",
+    ]
+    outputs = [ "$target_gen_dir/host_correspondence_audit.stamp" ]
+    args = [
+      "--src-root",
+      rebase_path("//", root_build_dir),
+      "--ontology",
+      rebase_path("ontology/aurelian-source-domain.ontology.yaml",
+                  root_build_dir),
+      "--descriptor",
+      rebase_path(
+          "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json",
+          root_build_dir),
+      "--stamp",
+      rebase_path("$target_gen_dir/host_correspondence_audit.stamp",
                   root_build_dir),
     ]
     deps = [ "//third_party/blink/public/devtools_protocol:protocol_version" ]
