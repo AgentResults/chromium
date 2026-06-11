@@ -258,8 +258,11 @@ void BrowserMainExtra::PostCreateThreads() {
   //    Stop()-coverable, typed timeout, no UI-thread block.
   impl_->uds_register = std::make_unique<UdsRegister>();
   const std::string sock = ResolveAgrippaSock();
+  // ACM-8: the federation seam shares the SAME operator anchor the renderer
+  // membranes get — one trust root for every membrane in this embodiment.
   const bool dialed = impl_->uds_register->Start(
-      sock, "chrome", "aurelian-browser", InstalledChromeDispatch());
+      sock, "chrome", "aurelian-browser", InstalledChromeDispatch(),
+      impl_->cap_anchor);
   LOG(WARNING) << "[aurelian] machine-hub register "
                << (dialed ? "dialed + registered facet chrome over"
                           : "no hub at")

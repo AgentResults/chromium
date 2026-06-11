@@ -780,6 +780,8 @@ if (enable_aurelian) {
     sources = [
       "capability/cap_chain.cc",
       "capability/cap_chain.h",
+      "capability/cap_gate.cc",
+      "capability/cap_gate.h",
       "capability/cap_membrane.cc",
       "capability/cap_membrane.h",
       "capability/cap_predicate.cc",
@@ -814,6 +816,8 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      # ACM-8: the dispatchAt seam runs the federation cap gate.
+      ":aurelian_capability",
       "//base",
       "//velite",
     ]

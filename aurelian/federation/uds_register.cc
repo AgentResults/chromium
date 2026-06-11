@@ -4,11 +4,13 @@
 
 #include "aurelian/federation/uds_register.h"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <thread>
 #include <utility>
 
+#include "aurelian/capability/cap_gate.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "velite/agentspaces-wire/dispatcher.hpp"
@@ -124,6 +126,26 @@ std::string DerivePath(const std::string& uri, const std::string& verb) {
   return rel + "/" + verb;
 }
 
+// ACM-8: the canonical ABSOLUTE form of a dispatchAt uri, derived by the
+// exact stripping DerivePath applies — so the cap gate always matches the
+// same resource the dispatch resolves, whichever spelling (absolute /
+// relative) the caller used.
+std::string CanonicalGateUri(const std::string& uri) {
+  std::string rel;
+  if (uri.compare(0, sizeof(kChromeUriPrefix) - 1, kChromeUriPrefix) == 0) {
+    rel = uri.substr(sizeof(kChromeUriPrefix) - 1);
+  } else {
+    rel = uri;
+  }
+  while (!rel.empty() && rel.front() == '/') {
+    rel.erase(rel.begin());
+  }
+  if (rel.empty()) {
+    return kChromeUriPrefix;
+  }
+  return std::string(kChromeUriPrefix) + "/" + rel;
+}
+
 // A navigable child handle bound to a legion://chrome/<uri>. Returned (slot-
 // exported) by getResource so a controller can WALK the tree over the wire:
 //   peer.getResource("legion://chrome/system").ask("info")   -> the leaf value
@@ -191,9 +213,18 @@ class NavHandle : public Handle {
 // — over the register wire, adopting the substrate's proven slot-ref primitive.
 class AurelianBootstrap : public Handle {
  public:
-  static std::shared_ptr<AurelianBootstrap> make(ChromeDispatchFn dispatch) {
+  // `cap_anchor` is the operator cap trust anchor (32 bytes = provisioned;
+  // anything else = no anchor → a presented cap fail-closes typed). ACM-8:
+  // a dispatchAt frame carrying a `cap` field (serialized delegation chain)
+  // is gated through GateFederationDispatch BEFORE the dispatch runs —
+  // descendant-scoped attenuation at the seam. A capless frame keeps the
+  // connection's facet-level authority (Agrippa's mint gate authorized the
+  // registration — the proven keystone status quo).
+  static std::shared_ptr<AurelianBootstrap> make(
+      ChromeDispatchFn dispatch,
+      const std::vector<uint8_t>& cap_anchor) {
     return std::shared_ptr<AurelianBootstrap>(
-        new AurelianBootstrap(std::move(dispatch)));
+        new AurelianBootstrap(std::move(dispatch), cap_anchor));
   }
 
   velite::agentspaces::StateKind state_kind() const override {
@@ -213,6 +244,23 @@ class AurelianBootstrap : public Handle {
       const Value* vv = spec.object_get("verb");
       if (!uv || !uv->is_string() || !vv || !vv->is_string()) {
         return ValueHandle::make_broken("legion://errors/InvalidArgument");
+      }
+      // ACM-8: authority before arguments — a presented cap is verified to
+      // the operator anchor and its effective predicate enforced on the
+      // CANONICAL full URI; a refused dispatch never runs. Cap absent =
+      // the connection's facet-level authority (status quo).
+      const Value* capv = spec.object_get("cap");
+      if (capv) {
+        if (!capv->is_string()) {
+          return ValueHandle::make_broken("cap-refused:cap-chain-malformed");
+        }
+        std::string denied = GateFederationDispatch(
+            capv->as_string(), anchor_, has_anchor_,
+            CanonicalGateUri(uv->as_string()), vv->as_string(),
+            base::Time::Now().ToTimeT());
+        if (!denied.empty()) {
+          return ValueHandle::make_broken(denied);
+        }
       }
       // HS-3: the dispatchAt frame's `spec` field (absent = no spec) crosses
       // the seam serialized + value-only.
@@ -247,12 +295,22 @@ class AurelianBootstrap : public Handle {
   void tell(std::string_view, const Value&) override {}
 
  private:
-  explicit AurelianBootstrap(ChromeDispatchFn dispatch)
+  AurelianBootstrap(ChromeDispatchFn dispatch,
+                    const std::vector<uint8_t>& cap_anchor)
       : dispatch_(std::move(dispatch)),
-        self_(std::string("legion://chrome")) {}
+        self_(std::string("legion://chrome")) {
+    if (cap_anchor.size() == anchor_.size()) {
+      std::copy(cap_anchor.begin(), cap_anchor.end(), anchor_.begin());
+      has_anchor_ = true;
+    }
+  }
 
   ChromeDispatchFn dispatch_;
   Value self_;
+  // ACM-8: the operator cap trust anchor (the SAME anchor the renderer
+  // membranes are provisioned with). No anchor → presented caps fail closed.
+  PubKey anchor_{};
+  bool has_anchor_ = false;
 };
 
 }  // namespace
@@ -295,7 +353,8 @@ UdsRegister::~UdsRegister() {
 bool UdsRegister::Start(const std::string& socket_path,
                         const std::string& facet,
                         const std::string& child_dest_hash,
-                        ChromeDispatchFn dispatch) {
+                        ChromeDispatchFn dispatch,
+                        const std::vector<uint8_t>& cap_anchor) {
   impl_->channel = std::make_shared<velite::UdsChannel>();
   if (!impl_->channel->connect(socket_path.c_str())) {
     impl_->channel.reset();
@@ -303,7 +362,7 @@ bool UdsRegister::Start(const std::string& socket_path,
   }
   velite::UdsChannel* raw = impl_->channel.get();
   impl_->disp = std::make_shared<Dispatcher>(
-      AurelianBootstrap::make(std::move(dispatch)),
+      AurelianBootstrap::make(std::move(dispatch), cap_anchor),
       [raw](const std::string& frame) {
         raw->send(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
       });

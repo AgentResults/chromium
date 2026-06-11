@@ -20,9 +20,11 @@
 #ifndef AURELIAN_FEDERATION_UDS_REGISTER_H_
 #define AURELIAN_FEDERATION_UDS_REGISTER_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace aurelian {
 
@@ -49,10 +51,24 @@ class UdsRegister {
   // send the update{Mount} register frame. `dispatch` resolves forwarded leaf
   // asks. Returns true iff the dial connected (the register frame was sent).
   // Spawns a serve thread that pumps inbound forwarded asks until Stop().
+  //
+  // ACM-8 (design section 5 prove-or-build): `cap_anchor` is the operator/
+  // machine cap trust anchor (32-byte Ed25519 pub — the SAME anchor the
+  // renderer membranes are provisioned with at boot). A dispatchAt frame
+  // carrying a `cap` field (a serialized delegation chain, cap_wire format)
+  // is verified back to this anchor and its effective predicate enforced on
+  // the full target URI BEFORE the dispatch runs — descendant-scoped
+  // attenuation at the seam, which the proven path otherwise lacks (Agrippa's
+  // gate is mint-time, facet-granularity; the hub forwards per-dispatch
+  // blindly). Empty/wrong-sized anchor = no anchor provisioned: a presented
+  // cap then fail-closes typed (cap-untrusted-anchor); capless dispatches
+  // keep the connection's facet-level authority either way (the status quo —
+  // the Agrippa mint gate authorized the registration).
   bool Start(const std::string& socket_path,
              const std::string& facet,
              const std::string& child_dest_hash,
-             ChromeDispatchFn dispatch);
+             ChromeDispatchFn dispatch,
+             const std::vector<uint8_t>& cap_anchor);
 
   // Stop the serve loop, close the connection (the hub revokes the facet), join.
   void Stop();

@@ -11,9 +11,14 @@
 
 #include <unistd.h>
 
+#include <map>
 #include <string>
+#include <vector>
 
+#include "aurelian/capability/cap_chain.h"
+#include "aurelian/capability/cap_wire.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
@@ -199,6 +204,144 @@ IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
               ans.value.as_string() == "legion://chrome/")
       << "forwarded dispatchAt must reach the SEALED root (UI-hop), got: "
       << (ans.value.is_string() ? ans.value.as_string() : "<not-string>");
+}
+
+// ---------------------------------------------------------------------------
+// ACM-8 — the federation cap gate, LIVE in the boot path: the operator anchor
+// published via AURELIAN_CAP_ANCHOR must reach the dispatchAt seam (the same
+// anchor the renderer membranes get), and a scoped cap presented over the
+// real boot UDS must be enforced against the REAL sealed root — in-subtree
+// admitted, out-of-subtree refused typed BEFORE the dispatch runs.
+// ---------------------------------------------------------------------------
+
+class AurelianBootCapGateBrowserTest : public AurelianBootRegisterBrowserTest {
+ protected:
+  void SetUpInProcessBrowserTestFixture() override {
+    AurelianBootRegisterBrowserTest::SetUpInProcessBrowserTestFixture();
+    // Publish the operator anchor the way Agrippa does at spawn — the boot
+    // path reads it in PostCreateThreads (ResolveCapAnchor) and must thread
+    // it to BOTH membranes (renderer provisioner + the federation seam).
+    anchor_priv_.fill(0xA7);
+    PubKey pub = PubFromPriv(anchor_priv_);
+    ::setenv("AURELIAN_CAP_ANCHOR", base::HexEncode(pub).c_str(),
+             /*overwrite=*/1);
+  }
+
+  void TearDownInProcessBrowserTestFixture() override {
+    ::unsetenv("AURELIAN_CAP_ANCHOR");
+    AurelianBootRegisterBrowserTest::TearDownInProcessBrowserTestFixture();
+  }
+
+  // A single-link operator->controller chain scoped to `pattern`.
+  std::string ScopedCap(const std::string& pattern) {
+    PrivKey controller{};
+    controller.fill(0xA8);
+    CapLink link;
+    link.cap_id = "root";
+    link.parent_cap_id = "";
+    link.predicate = "pattern=" + pattern;
+    link.expires = 0;
+    link.issuer_pub = PubFromPriv(anchor_priv_);
+    link.subject_pub = PubFromPriv(controller);
+    EXPECT_TRUE(SignLink(&link, anchor_priv_));
+    return SerializeChain({link});
+  }
+
+  PrivKey anchor_priv_{};
+};
+
+IN_PROC_BROWSER_TEST_F(AurelianBootCapGateBrowserTest,
+                       BootGateEnforcesScopedCapOnSealedRoot) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  velite::UdsChannel server;
+  velite::UdsListener::AcceptOutcome out =
+      velite::UdsListener::AcceptOutcome::NoneReady;
+  for (int i = 0;
+       i < 4000 && out != velite::UdsListener::AcceptOutcome::Accepted; ++i) {
+    out = listener_.accept(server, nullptr);
+    if (out == velite::UdsListener::AcceptOutcome::NoneReady) {
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+  }
+  ASSERT_EQ(out, velite::UdsListener::AcceptOutcome::Accepted);
+
+  velite::UdsChannel* raw = &server;
+  auto hub_bs = HubBootstrap::make();
+  Dispatcher hub(hub_bs, [raw](const std::string& f) {
+    raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
+  });
+
+  uint8_t buf[65536];
+  auto pump_hub = [&]() {
+    for (;;) {
+      size_t n = 0;
+      if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
+          n > 0) {
+        hub.on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+      } else {
+        break;
+      }
+    }
+    hub.pump_pending_answers();
+  };
+  auto spin = [&]() {
+    base::RunLoop loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, loop.QuitClosure(), base::Milliseconds(5));
+    loop.Run();
+  };
+  for (int i = 0; i < 800 && hub_bs->registered.empty(); ++i) {
+    pump_hub();
+    spin();
+  }
+  ASSERT_EQ(hub_bs->registered, "chrome");
+
+  auto dispatch_at = [&](const std::string& uri, const std::string& verb,
+                         const std::string& cap) {
+    std::map<std::string, Value> frame{{"uri", Value(uri)},
+                                       {"verb", Value(verb)}};
+    if (!cap.empty()) {
+      frame.emplace("cap", Value(cap));
+    }
+    uint32_t slot =
+        hub.emit_ask(0, "dispatchAt", Value::make_object(std::move(frame)));
+    Dispatcher::AnswerOutcome ans;
+    for (int i = 0; i < 800; ++i) {
+      pump_hub();
+      ans = hub.answer_outcome(slot);
+      if (ans.settled) {
+        break;
+      }
+      spin();
+    }
+    return ans;
+  };
+
+  // (a) An in-subtree cap (the whole chrome subtree) is ADMITTED and the ask
+  // reaches the REAL sealed root.
+  Dispatcher::AnswerOutcome ok_ans = dispatch_at(
+      "legion://chrome", "__getIdentity", ScopedCap("legion://chrome/*"));
+  EXPECT_TRUE(ok_ans.settled && ok_ans.ok) << ok_ans.reason;
+  EXPECT_TRUE(ok_ans.value.is_string() &&
+              ok_ans.value.as_string() == "legion://chrome/")
+      << "cap-admitted dispatch must reach the sealed root, got: "
+      << (ok_ans.value.is_string() ? ok_ans.value.as_string()
+                                   : "<not-string>");
+
+  // (b) A cap scoped to a (nonexistent) target subtree must be REFUSED on
+  // prefs — typed, with the REAL pref never read. (RED pre-gate: the cap is
+  // silently ignored and the live pref value comes back.)
+  Dispatcher::AnswerOutcome refused = dispatch_at(
+      "legion://chrome/prefs/browser.show_home_button", "get",
+      ScopedCap("legion://chrome/targets/no-such-target/*"));
+  ASSERT_TRUE(refused.settled);
+  EXPECT_FALSE(refused.ok)
+      << "the scoped cap was honored OUTSIDE its subtree; value="
+      << (refused.value.is_string() ? refused.value.as_string()
+                                    : "<not-string>");
+  EXPECT_NE(refused.reason.find("cap-refused"), std::string::npos)
+      << refused.reason;
 }
 
 }  // namespace aurelian

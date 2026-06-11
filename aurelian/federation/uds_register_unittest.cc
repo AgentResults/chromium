@@ -13,8 +13,13 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include "aurelian/capability/cap_chain.h"
+#include "aurelian/capability/cap_wire.h"
 
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
@@ -84,7 +89,8 @@ TEST(AurelianUdsRegisterTest, DialsAndSendsRegisterMountFrame) {
 
   UdsRegister reg;
   ASSERT_TRUE(reg.Start(path, "chrome", "ed25519:chromeDH",
-                        [](const std::string&, const std::string&) { return std::string("x"); }))
+                        [](const std::string&, const std::string&) { return std::string("x"); },
+                        /*cap_anchor=*/{}))
       << "Start must connect to the UDS";
 
   // Accept the dialed connection + read the first frame (the register handshake).
@@ -135,7 +141,8 @@ TEST(AurelianUdsRegisterTest, ForwardedDispatchAtResolvesViaDispatch) {
       [&dispatched](const std::string& p, const std::string&) -> std::string {
         dispatched.store(true);
         return std::string("answer:") + p;  // e.g. answer:system/info
-      }));
+      },
+      /*cap_anchor=*/{}));
 
   velite::UdsChannel server;
   velite::UdsListener::AcceptOutcome out =
@@ -215,7 +222,8 @@ TEST(AurelianUdsRegisterTest, ForwardedGetResourceReturnsNavigableChild) {
       path, "chrome", "ed25519:chromeDH",
       [](const std::string& p, const std::string&) -> std::string {
         return std::string("answer:") + p;  // e.g. answer:system/info
-      }));
+      },
+      /*cap_anchor=*/{}));
 
   velite::UdsChannel server;
   velite::UdsListener::AcceptOutcome out =
@@ -317,14 +325,15 @@ struct SpecWireHarness {
   std::unique_ptr<Dispatcher> hub;
   uint8_t buf[65536];
 
-  bool Start(ChromeDispatchFn dispatch) {
+  bool Start(ChromeDispatchFn dispatch,
+             const std::vector<uint8_t>& cap_anchor = {}) {
     sock_path = TempSock();
     ::unlink(sock_path.c_str());
     if (!listener.listen(sock_path.c_str())) {
       return false;
     }
     if (!reg.Start(sock_path, "chrome", "ed25519:chromeDH",
-                   std::move(dispatch))) {
+                   std::move(dispatch), cap_anchor)) {
       return false;
     }
     velite::UdsListener::AcceptOutcome out =
@@ -478,6 +487,422 @@ TEST(AurelianUdsRegisterTest, SlotRefBearingSpecRefusedTyped) {
   EXPECT_NE(o.reason.find("SlotRefInSpec"), std::string::npos) << o.reason;
   EXPECT_FALSE(dispatched.load())
       << "the spec was silently flattened into a dispatch";
+}
+
+// ---------------------------------------------------------------------------
+// ACM-8 (design section 5 prove-or-build) — the federation cap gate at the
+// AurelianBootstrap dispatchAt seam. PROVEN before building: descendant-scoped
+// enforcement for deep mirror URIs happens NOWHERE on the proven path — the
+// browser side verifies no cap (zero cap_* in aurelian/federation/ pre-slice),
+// Agrippa's RegisteredEmbodimentHandle::ask_impl forwards every dispatchAt
+// blindly, and Agrippa's mint gate is facet-granularity (the whole
+// legion://chrome subtree). So the gate is BUILT here, from the existing
+// components: cap_wire chain decode + cap_chain/cap_membrane verify back to
+// the operator anchor + cap_predicate enforcement over the FULL target URI.
+//
+// Contract under test: a dispatchAt frame carrying a `cap` field (serialized
+// delegation chain) is admitted iff the chain verifies to the provisioned
+// anchor AND its effective predicate admits (verb, uri); refusals are typed
+// (`cap-refused:<reason>`) and the dispatch NEVER runs. A capless frame keeps
+// the connection's facet-level authority (the status quo the keystone proved;
+// Agrippa's mint gate authorized the registration). Real Ed25519 chains, real
+// UDS wire, real Dispatchers — no mocks.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+PrivKey GateSeed(uint8_t b) {
+  PrivKey k{};
+  k.fill(b);
+  return k;
+}
+
+CapLink GateMakeLink(const std::string& cap_id,
+                     const std::string& parent,
+                     const std::string& predicate,
+                     int64_t expires,
+                     const PrivKey& issuer_priv,
+                     const PubKey& subject_pub) {
+  CapLink link;
+  link.cap_id = cap_id;
+  link.parent_cap_id = parent;
+  link.predicate = predicate;
+  link.expires = expires;
+  link.issuer_pub = PubFromPriv(issuer_priv);
+  link.subject_pub = subject_pub;
+  EXPECT_TRUE(SignLink(&link, issuer_priv));
+  return link;
+}
+
+// operator anchor -> controller. The anchor IS the trust root the harness
+// provisions onto the seam (the same shape the boot path reads from
+// AURELIAN_CAP_ANCHOR).
+struct CapGateFixture {
+  PrivKey anchor = GateSeed(0x51);
+  PrivKey controller = GateSeed(0x52);
+  PubKey anchor_pub = PubFromPriv(anchor);
+  PubKey controller_pub = PubFromPriv(controller);
+
+  std::vector<uint8_t> AnchorBytes() const {
+    return std::vector<uint8_t>(anchor_pub.begin(), anchor_pub.end());
+  }
+
+  // A single-link chain: the operator grants the controller `pattern`.
+  std::vector<CapLink> Scoped(const std::string& pattern) {
+    return {GateMakeLink("root", "", "pattern=" + pattern, 0, anchor,
+                         controller_pub)};
+  }
+
+  static Value CapField(const std::vector<CapLink>& chain) {
+    return Value(SerializeChain(chain));
+  }
+};
+
+// Emit a dispatchAt{uri, verb, spec?, cap?} and settle it.
+Dispatcher::AnswerOutcome DispatchWithCap(SpecWireHarness& h,
+                                          const std::string& uri,
+                                          const std::string& verb,
+                                          const Value& spec,
+                                          const Value& cap) {
+  std::map<std::string, Value> frame{{"uri", Value(uri)},
+                                     {"verb", Value(verb)}};
+  if (!spec.is_null()) {
+    frame.emplace("spec", spec);
+  }
+  if (!cap.is_null()) {
+    frame.emplace("cap", cap);
+  }
+  uint32_t slot =
+      h.hub->emit_ask(0, "dispatchAt", Value::make_object(std::move(frame)));
+  return h.AskSettled(slot);
+}
+
+}  // namespace
+
+// Positive control: a cap scoped to targets/tabA admits a dispatch INSIDE
+// that subtree and the dispatch reaches the seam with the right path.
+TEST(AurelianUdsCapGateTest, ScopedCapAdmitsInSubtreeDispatch) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::string seen_path = "<never-called>";
+  ASSERT_TRUE(h.Start(
+      [&](const std::string& p, const std::string&) -> std::string {
+        seen_path = p;
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/targets/tabA/cdp/Runtime/evaluate", "invoke",
+      Value::make_object({{"expression", Value(std::string("6*7"))}}),
+      CapGateFixture::CapField(
+          f.Scoped("legion://chrome/targets/tabA/*")));
+
+  EXPECT_TRUE(o.settled && o.ok) << o.reason;
+  EXPECT_EQ(seen_path, "targets/tabA/cdp/Runtime/evaluate/invoke");
+}
+
+// The base node ITSELF is inside the cap's subtree (the trailing-slash
+// canonicalization — a `base/*` pattern admits `base`, but never `baseX`).
+TEST(AurelianUdsCapGateTest, ScopedCapAdmitsBaseNodeItself) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::string seen_path = "<never-called>";
+  ASSERT_TRUE(h.Start(
+      [&](const std::string& p, const std::string&) -> std::string {
+        seen_path = p;
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/targets/tabA", "__getChildren", Value(),
+      CapGateFixture::CapField(
+          f.Scoped("legion://chrome/targets/tabA/*")));
+
+  EXPECT_TRUE(o.settled && o.ok) << o.reason;
+  EXPECT_EQ(seen_path, "targets/tabA/__getChildren");
+}
+
+// THE plan RED: the same targets/tabA cap is REFUSED on the sibling target —
+// typed, and the dispatch never runs. (Pre-gate this dispatched: the cap
+// field was silently ignored — the proven enforcement gap.)
+TEST(AurelianUdsCapGateTest, ScopedCapRefusedOnSiblingTarget) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/targets/tabB/cdp/Runtime/evaluate", "invoke",
+      Value::make_object({{"expression", Value(std::string("6*7"))}}),
+      CapGateFixture::CapField(
+          f.Scoped("legion://chrome/targets/tabA/*")));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok) << "a targets/tabA cap must be REFUSED on tab B";
+  EXPECT_NE(o.reason.find("cap-refused"), std::string::npos) << o.reason;
+  EXPECT_NE(o.reason.find("pattern-mismatch"), std::string::npos) << o.reason;
+  EXPECT_FALSE(dispatched.load())
+      << "the out-of-subtree dispatch RAN — the gate is absent";
+}
+
+// The plan RED's second half: the targets/tabA cap is refused on prefs/*.
+TEST(AurelianUdsCapGateTest, ScopedCapRefusedOnPrefs) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/prefs/browser.show_home_button", "get", Value(),
+      CapGateFixture::CapField(
+          f.Scoped("legion://chrome/targets/tabA/*")));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok) << "a targets-scoped cap must be REFUSED on prefs/*";
+  EXPECT_NE(o.reason.find("cap-refused"), std::string::npos) << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// The plan's domain-narrow case: a cap based at targets/tabA/cdp/Page
+// dispatches Page.* on that tab but is REFUSED on Network.*.
+TEST(AurelianUdsCapGateTest, PageScopedCapDispatchesPageRefusesNetwork) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::string seen_path = "<never-called>";
+  std::atomic<int> dispatch_count{0};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string& p, const std::string&) -> std::string {
+        seen_path = p;
+        dispatch_count.fetch_add(1);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Value cap = CapGateFixture::CapField(
+      f.Scoped("legion://chrome/targets/tabA/cdp/Page/*"));
+
+  Dispatcher::AnswerOutcome page = DispatchWithCap(
+      h, "legion://chrome/targets/tabA/cdp/Page/navigate", "invoke",
+      Value::make_object({{"url", Value(std::string("about:blank"))}}), cap);
+  EXPECT_TRUE(page.settled && page.ok) << page.reason;
+  EXPECT_EQ(seen_path, "targets/tabA/cdp/Page/navigate/invoke");
+  EXPECT_EQ(dispatch_count.load(), 1);
+
+  Dispatcher::AnswerOutcome net = DispatchWithCap(
+      h, "legion://chrome/targets/tabA/cdp/Network/getCookies", "invoke",
+      Value(), cap);
+  ASSERT_TRUE(net.settled);
+  EXPECT_FALSE(net.ok) << "a Page-scoped cap must be REFUSED on Network.*";
+  EXPECT_NE(net.reason.find("cap-refused"), std::string::npos) << net.reason;
+  EXPECT_EQ(dispatch_count.load(), 1)
+      << "the Network dispatch RAN despite the Page-scoped cap";
+}
+
+// Keystone leg (f) shape: a VALIDLY-SIGNED cap whose subtree is out of this
+// embodiment entirely is refused.
+TEST(AurelianUdsCapGateTest, ValidlySignedOutOfSubtreeCapRefused) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/cdp", "__getChildren", Value(),
+      CapGateFixture::CapField(f.Scoped("legion://other/*")));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok);
+  EXPECT_NE(o.reason.find("cap-refused"), std::string::npos) << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// Trust: a chain rooted in a DIFFERENT key than the provisioned anchor is
+// refused as untrusted, never honored.
+TEST(AurelianUdsCapGateTest, WrongAnchorChainRefused) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  // Same shape, signed by a key that is NOT the provisioned anchor.
+  PrivKey rogue = GateSeed(0x66);
+  std::vector<CapLink> chain = {GateMakeLink(
+      "root", "", "pattern=legion://chrome/*", 0, rogue, f.controller_pub)};
+
+  Dispatcher::AnswerOutcome o =
+      DispatchWithCap(h, "legion://chrome/cdp", "__getChildren", Value(),
+                      CapGateFixture::CapField(chain));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok);
+  EXPECT_NE(o.reason.find("cap-untrusted-anchor"), std::string::npos)
+      << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// A malformed cap field is a typed refusal, never silently ignored (silently
+// ignoring it was exactly the pre-gate behavior).
+TEST(AurelianUdsCapGateTest, MalformedCapRefusedTyped) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o =
+      DispatchWithCap(h, "legion://chrome/cdp", "__getChildren", Value(),
+                      Value(std::string("not-a-chain")));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok);
+  EXPECT_NE(o.reason.find("cap-refused"), std::string::npos) << o.reason;
+  EXPECT_NE(o.reason.find("cap-chain-malformed"), std::string::npos)
+      << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// Chain discipline holds at the seam: a delegation that BROADENS its parent
+// is refused by the verifier (cap-chain-invalid), not honored at its own
+// claimed width.
+TEST(AurelianUdsCapGateTest, BroadeningDelegationRefused) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  PrivKey delegatee = GateSeed(0x53);
+  std::vector<CapLink> chain = {
+      GateMakeLink("root", "",
+                   "pattern=legion://chrome/targets/tabA/cdp/Page/*", 0,
+                   f.anchor, f.controller_pub),
+      // The child claims the WHOLE target subtree — a broadening.
+      GateMakeLink("d1", "root", "pattern=legion://chrome/targets/tabA/*", 0,
+                   f.controller, PubFromPriv(delegatee)),
+  };
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/targets/tabA/cdp/Network/getCookies", "invoke",
+      Value(), CapGateFixture::CapField(chain));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok);
+  EXPECT_NE(o.reason.find("cap-chain-invalid"), std::string::npos)
+      << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// Expiry is enforced at the seam.
+TEST(AurelianUdsCapGateTest, ExpiredCapRefused) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  std::vector<CapLink> chain = {
+      GateMakeLink("root", "", "pattern=legion://chrome/*,expires=1000",
+                   /*expires=*/1000, f.anchor, f.controller_pub)};
+
+  Dispatcher::AnswerOutcome o =
+      DispatchWithCap(h, "legion://chrome/cdp", "__getChildren", Value(),
+                      CapGateFixture::CapField(chain));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok);
+  EXPECT_NE(o.reason.find("cap-expired"), std::string::npos) << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// Fail-closed: a presented cap with NO provisioned anchor is refused — the
+// seam trusts nothing it cannot verify (it never vouches for itself).
+TEST(AurelianUdsCapGateTest, CapWithNoProvisionedAnchorRefused) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::atomic<bool> dispatched{false};
+  ASSERT_TRUE(h.Start(
+      [&](const std::string&, const std::string&) -> std::string {
+        dispatched.store(true);
+        return std::string("ok");
+      } /* no anchor */));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/cdp", "__getChildren", Value(),
+      CapGateFixture::CapField(f.Scoped("legion://chrome/*")));
+
+  ASSERT_TRUE(o.settled);
+  EXPECT_FALSE(o.ok);
+  EXPECT_NE(o.reason.find("cap-untrusted-anchor"), std::string::npos)
+      << o.reason;
+  EXPECT_FALSE(dispatched.load());
+}
+
+// The status-quo pin: a CAPLESS dispatch keeps the connection's facet-level
+// authority (Agrippa's mint gate authorized the registration — the proven
+// keystone behavior). The gate narrows presented caps; it does not invent a
+// new requirement on the existing path.
+TEST(AurelianUdsCapGateTest, CaplessDispatchKeepsFacetAuthority) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  CapGateFixture f;
+  SpecWireHarness h;
+  std::string seen_path = "<never-called>";
+  ASSERT_TRUE(h.Start(
+      [&](const std::string& p, const std::string&) -> std::string {
+        seen_path = p;
+        return std::string("ok");
+      },
+      f.AnchorBytes()));
+
+  Dispatcher::AnswerOutcome o = DispatchWithCap(
+      h, "legion://chrome/system", "info", Value(), Value());
+
+  EXPECT_TRUE(o.settled && o.ok) << o.reason;
+  EXPECT_EQ(seen_path, "system/info");
 }
 
 }  // namespace aurelian
