@@ -17,7 +17,7 @@ never committed. So the overlay is what lives in git; the base is pinned below.
 
 - Chromium version: **148.0.7765.0**  (`chrome/VERSION`)
 - Upstream: `https://chromium.googlesource.com/chromium/src.git`
-- gclient solution: see `build-meta/gclient.config`
+- gclient solution: see `build-meta/gclient.config`\n- exact base reconstruction: `build-meta/base-state-vs-148.0.7765.0.patch` (202 stock files; the precise src SHA was managed:False / unrecorded, so the base state is captured as a patch against the tag) + the pinned `DEPS`
 
 ## Reproduce from scratch
 
@@ -30,6 +30,10 @@ export PATH=$PWD/depot_tools:$PATH
 mkdir chromium && cd chromium
 cp /path/to/build-meta/gclient.config .gclient
 gclient sync --revision src@refs/tags/148.0.7765.0 --no-history
+
+# 2b. reconstruct the EXACT base source state (the checkout was managed:False and
+#     drifted from the tag; this patch + the pinned DEPS make it bit-exact)
+cd src && git apply ../path/to/build-meta/base-state-vs-148.0.7765.0.patch && cd ..
 
 # 3. overlay this repo on top of src/ (its tracked files replace/add into the tree)
 cd src && git init && git remote add agentresults <fork-url> && git fetch agentresults asmodeus && git checkout asmodeus
