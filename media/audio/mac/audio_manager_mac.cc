@@ -1025,35 +1025,13 @@ AudioOutputStream* AudioManagerMac::MakeLowLatencyOutputStream(
   AUHALStream* stream = new AUHALStream(this, params, device, log_callback);
   output_streams_.insert(stream);
 
-  // Asmodeus: ALWAYS wrap speaker output with a tap when ~/.asmodeus/ exists.
-  // Meet only decodes/plays remote WebRTC audio in the host tab — participant
-  // WebContents get silence from their own AsmodeusAudioOutput. The tap
-  // intercepts the host's audio and broadcasts to participant SHM files.
-  //
-  // We install the tap even before participants are added because the host
-  // tab creates speaker streams BEFORE agents join. The tap's periodic
-  // ScanParticipantBuffers() will discover participants as they're added.
-  // Asmodeus: wrap speaker output with a tap to broadcast meeting audio
-  // to all participant SHM files. Uses PersistentBroadcast so write positions
-  // are monotonic across stream restarts (Meet creates short-lived streams).
-  {
-    std::string media_dir = AsmodeusMediaDir();
-    if (!media_dir.empty()) {
-      struct stat dir_stat;
-      if (stat(media_dir.c_str(), &dir_stat) == 0 && S_ISDIR(dir_stat.st_mode)) {
-        std::string host_shm = media_dir + "/audio-out-host.shm";
-        // Initialize persistent broadcast (idempotent — only runs once)
-        asmodeus::InitPersistentBroadcast(host_shm);
-        // Wrap with tap — tap writes to PersistentBroadcast, not its own buffer
-        auto* tap = new asmodeus::AsmodeusAudioOutputTap(
-            stream, /*output_buffer=*/nullptr);
-        LOG(WARNING) << "[Asmodeus] Host tap: wrapping speaker output"
-                     << " (persistent broadcast)";
-        return tap;
-      }
-    }
-  }
-
+  // AURELIAN-MEDIA-CONTROL §5.1: the macOS CoreAudio output tap is REMOVED.
+  // Inbound remote audio is now captured at the fork's own WebRTC receive
+  // pipeline (PeerConnectionRemoteAudioSource::OnData → audio-out-<name>.shm),
+  // never at the OS output stage. Physical-speaker silence is preserved by the
+  // stock --mute-audio launch switch (zeros the output buffer downstream of
+  // decode), not by the tap's SetVolume(0.0). No tap is installed here — one
+  // producer of each ear ring (the engine hook), no two-producer race.
   return stream;
 }
 
