@@ -51,6 +51,10 @@ _velite_include_dirs = [
   "$_velite_src/replay-handle/include",
   "$_velite_src/mt/runtime/include",
   "$_velite_src/mt/compiler/include",
+  # quickjs: current velite mt/runtime includes <velite/quickjs.hpp> (the JSON
+  # serializer is QuickJS — "no parallel serializer"). The header path must be
+  # visible to every velite source_set (same-guards-as-//velite invariant).
+  "$_velite_src/quickjs/include",
   "$_velite_src/crypto/vendor",
   "$_velite_src/agentspaces-wire/src",
   "$_velite_src/forth/src",
@@ -86,6 +90,15 @@ config("velite_warnings") {
     "-Wno-sign-compare",
     "-Wno-shorten-64-to-32",
   ]
+  # Federated-KG is present in this build (velite_federated_kg compiled below),
+  # so the concrete KGNode surface (kg_concrete/cap_admits + the kg_handle_
+  # concrete_ MEMBER) is enabled. This MUST match velite's own CMake
+  # (agentspaces-wire/CMakeLists.txt: PUBLIC LEGION_HAS_FEDERATED_KG=1). Defined
+  # here so EVERY velite source_set that includes conformance_bootstrap.hpp sees
+  # the SAME class layout — an inconsistent define is an ODR violation (the
+  # guarded kg_handle_concrete_ member changes the object size). The aurelian
+  # consumers get the same define via static_library("velite") all_dependent_configs.
+  defines = [ "LEGION_HAS_FEDERATED_KG=1" ]
 }
 
 # --- Monocypher (vendored C crypto primitives) ---
@@ -108,6 +121,90 @@ source_set("monocypher") {
     "//build/config/compiler:rtti",
     ":velite_warnings",
   ]
+}
+
+# --- QuickJS engine (vendored C) — mirrors third-party/quickjs-velite/
+# CMakeLists.txt. Current velite mt/runtime hard-depends on it (JSON serializer;
+# "no parallel serializer"). Forked from quickjs-ng c707cf5. C11, third-party. ---
+source_set("qjs_velite") {
+  sources = [
+    "$_velite_src/../third-party/quickjs-velite/upstream/dtoa.c",
+    "$_velite_src/../third-party/quickjs-velite/upstream/libregexp.c",
+    "$_velite_src/../third-party/quickjs-velite/upstream/libunicode.c",
+    "$_velite_src/../third-party/quickjs-velite/upstream/quickjs.c",
+  ]
+  include_dirs = [ "$_velite_src/../third-party/quickjs-velite/upstream" ]
+  defines = [
+    "_GNU_SOURCE",
+    "CONFIG_VERSION=\"2026-05-05-c707cf5\"",
+    "VELITE_QJS_REPLAY_COMMIT_HASH=\"c707cf5eda67a97bbff7a60cb2ef124fd4a77420\"",
+    "VELITE_QJS_REPLAY_PATCH_VERSION=\"replay-api-v1.0\"",
+  ]
+  # QuickJS's tightly-tuned C source — suppress what the upstream Makefile does
+  # (these come after configs' cflags, so they override chromium's -Werror set).
+  cflags_c = [
+    "-Wno-implicit-fallthrough",
+    "-Wno-sign-compare",
+    "-Wno-unused-parameter",
+    "-Wno-unused-but-set-variable",
+    "-Wno-unused-function",
+    "-Wno-shadow",
+    "-Wno-format-truncation",
+    "-Wno-array-bounds",
+    "-Wno-unused-variable",
+    "-Wno-missing-field-initializers",
+  ]
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+}
+
+# --- QuickJS C++ embedding glue (velite::quickjs::Vm — runtime.cpp uses it) ---
+source_set("velite_quickjs") {
+  sources = [ "$_velite_src/quickjs/src/vm.cpp" ]
+  include_dirs = _velite_include_dirs + [
+    "$_velite_src/quickjs/include",
+    "$_velite_src/quickjs/src",
+    "$_velite_src/../third-party/quickjs-velite/upstream",
+  ]
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+  deps = [ ":qjs_velite" ]
+}
+
+# --- Federated-KG (velite-federated-kg: federated_kg.cpp = the concrete KGNode) ---
+# Mirrors federated-kg/CMakeLists.txt (deps: velite-kg + velite-crypto). Current
+# velite search_handle.cpp reads KG entity rows via kg_concrete(), so search is
+# coupled to the concrete federated KGNode — the fork must compile it, and define
+# LEGION_HAS_FEDERATED_KG (via velite_warnings) so the guarded surface lights.
+source_set("velite_federated_kg") {
+  sources = [ "$_velite_src/federated-kg/src/federated_kg.cpp" ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
+  deps = [ ":velite_kg" ]
 }
 
 # --- Core: crypto + substrate + capability + envelope + envelopes + identity ---
@@ -385,7 +482,12 @@ source_set("velite_ontology") {
 # --- Search facility (Corpus; loaded once the vendored bootstrap's search
 # factory lights, CF-0) ---
 source_set("velite_search") {
-  sources = [ "$_velite_src/search/src/corpus.cpp" ]
+  sources = [
+    "$_velite_src/search/src/corpus.cpp",
+    # scorer.cpp: search::tokenize + EmbeddingScorer (hybrid ranking) — added to
+    # velite search in the 1891-commit drift.
+    "$_velite_src/search/src/scorer.cpp",
+  ]
   include_dirs = _velite_include_dirs
   configs -= [
     "//build/config/compiler:chromium_code",
@@ -469,6 +571,8 @@ source_set("velite_mt") {
     "$_velite_src/mt/runtime/tagged_cell.cpp",
   ]
   include_dirs = _velite_include_dirs
+  # mt/runtime/runtime.cpp uses velite::quickjs::Vm (the JSON serializer).
+  deps = [ ":velite_quickjs" ]
   configs -= [
     "//build/config/compiler:chromium_code",
     "//build/config/compiler:no_rtti",
@@ -504,10 +608,16 @@ source_set("velite_wire") {
     # extracted from it upstream: bootstrap_verbs, bootstrap_handles,
     # peer_session, facet_manifest, value_cbor, query_dataflow) is consumed by
     # Aurelian's conformance serve from CF-0 on.
+    # cache_runtime.cpp: the legion://cache CacheRuntime/CacheKey (cache.md) —
+    # added to velite agentspaces-wire in the 1891-commit drift.
+    "$_velite_src/agentspaces-wire/src/cache_runtime.cpp",
     "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
     "$_velite_src/agentspaces-wire/src/datastore_handle.cpp",
     "$_velite_src/agentspaces-wire/src/dispatcher.cpp",
     "$_velite_src/agentspaces-wire/src/facet_manifest.cpp",
+    # facet_manifest_exchange.cpp: build_propose_session / build_ack_session /
+    # verify_ack_session — the §2a session-establish functions.
+    "$_velite_src/agentspaces-wire/src/facet_manifest_exchange.cpp",
     "$_velite_src/agentspaces-wire/src/fact_handle.cpp",
     "$_velite_src/agentspaces-wire/src/federated_kg_handle.cpp",
     "$_velite_src/agentspaces-wire/src/frames.cpp",
@@ -536,6 +646,10 @@ source_set("velite_wire") {
   ]
   # envelopes/include first: ivm_crdt_handle.cpp needs the CBOR Envelope.
   include_dirs = [ "$_velite_src/envelopes/include" ] + _velite_include_dirs
+  # federated_kg_handle.cpp (in sources above) is the KgHandle wire impl over the
+  # concrete KGNode — link velite_federated_kg (LEGION_HAS_FEDERATED_KG lights the
+  # surface via velite_warnings).
+  deps = [ ":velite_federated_kg" ]
   configs -= [
     "//build/config/compiler:chromium_code",
     "//build/config/compiler:no_rtti",
@@ -549,6 +663,15 @@ source_set("velite_wire") {
   ]
 }
 
+# Federated-KG define for CONSUMERS of //velite (the aurelian source_sets): they
+# include conformance_bootstrap.hpp and size ConformanceBootstrap, so they MUST
+# see the SAME LEGION_HAS_FEDERATED_KG as velite's own TUs (ODR: the guarded
+# kg_handle_concrete_ MEMBER changes the object layout). Propagated to every
+# dependent via all_dependent_configs on the static_library below.
+config("velite_fkg_public") {
+  defines = [ "LEGION_HAS_FEDERATED_KG=1" ]
+}
+
 # --- Aggregate target ---
 static_library("velite") {
   deps = [
@@ -559,6 +682,7 @@ static_library("velite") {
     ":velite_datastore",
     ":velite_envelopes",
     ":velite_dataflow",
+    ":velite_federated_kg",
     ":velite_forth",
     ":velite_forth_compiler",
     ":velite_forth_handle",
@@ -566,8 +690,10 @@ static_library("velite") {
     ":velite_kg",
     ":velite_mt",
     ":velite_ontology",
+    ":velite_quickjs",
     ":velite_search",
     ":velite_wire",
   ]
+  all_dependent_configs = [ ":velite_fkg_public" ]
   complete_static_lib = true
 }

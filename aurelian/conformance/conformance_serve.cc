@@ -194,16 +194,17 @@ bool ConformanceServe::Start(const std::string& socket_path,
   });
   impl_->bootstrap->set_counterparty_dispatcher(impl_->disp.get());
 
-  // The computed __handshake manifest — INSTEAD of the Agrippa register ask
-  // (design §2.1); floor-validated by the vendored emitter.
-  if (!velite::agentspaces::wire::emit_session_handshake_with_facets(
-          *impl_->disp, aurelian_claimed_wire_facets(),
-          aurelian_claimed_internal_facets())) {
-    LOG(ERROR) << "[aurelian] conformance serve: floor-incomplete manifest";
-    ::close(fd);
-    impl_->fd = -1;
-    return false;
-  }
+  // sessions.md §2a — the peer is a RESPONDER: silent on connect until a
+  // propose-session arrives, then the velite Dispatcher's
+  // try_handle_session_envelope_ replies with the ack-session carrying THIS
+  // peer's facet manifest. Declare Aurelian's OWN manifest (its claimed
+  // wire/internal facets under legion://peers/aurelian) so the ack advertises
+  // Aurelian — not velite-cpp — via Dispatcher::set_local_facet_claims. The
+  // legacy proactive __handshake TELL is retired (no parallel system; the JS
+  // scenario session-manifest-in-ack asserts peer.handshake === null).
+  impl_->disp->set_local_facet_claims(aurelian_claimed_wire_facets(),
+                                      aurelian_claimed_internal_facets(),
+                                      "legion://peers/aurelian");
 
   impl_->connected.store(true);
   impl_->stop.store(false);

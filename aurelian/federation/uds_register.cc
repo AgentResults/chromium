@@ -708,12 +708,15 @@ bool UdsRegister::Start(const std::string& socket_path,
   });
   impl_->disp->emit_ask(0, "update", std::move(mount));
 
-  // CF-4 (design §4.3): the computed facet manifest follows the register
-  // ask on THIS wire — the SAME set the conformance serve emits (facets.md
-  // §6a; the §3.5 pre-flight's second capture).
-  velite::agentspaces::wire::emit_session_handshake_with_facets(
-      *impl_->disp, aurelian_claimed_wire_facets(),
-      aurelian_claimed_internal_facets());
+  // sessions.md §2a — the register-in peer is the CONNECTOR: declare Aurelian's
+  // OWN facet manifest, then emit a propose-session carrying it on THIS wire (the
+  // responder — Agrippa — answers with its ack-session in on_inbound). The legacy
+  // proactive __handshake emitter (emit_session_handshake_with_facets) is retired;
+  // set_local_facet_claims makes the propose advertise Aurelian, not velite-cpp.
+  impl_->disp->set_local_facet_claims(aurelian_claimed_wire_facets(),
+                                      aurelian_claimed_internal_facets(),
+                                      "legion://peers/aurelian");
+  impl_->disp->emit_propose_session();
 
   impl_->connected.store(true);
   impl_->stop.store(false);

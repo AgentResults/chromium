@@ -54,6 +54,11 @@ if (enable_aurelian) {
     "$_velite_src/crypto/vendor",
     "$_velite_src/mt/runtime/include",
     "$_velite_src/mt/compiler/include",
+    # quickjs: current velite mt/runtime includes <velite/quickjs.hpp> (the fork's
+    # velite source tree drifted 1891 commits and mt-runtime gained the quickjs
+    # serializer dep) — the header path must be visible (same-guards-as-//velite).
+    "$_velite_src/quickjs/include",
+    "$_velite_src/quickjs-handle/include",
   ]
 
   # Install-membrane: the typed EmbodimentPolicy (C++ legion://types/

@@ -57,8 +57,11 @@ using velite::agentspaces::Value;
 using velite::agentspaces::ValueHandle;
 using velite::agentspaces::wire::Dispatcher;
 
-// The driver side (what the launcher/runner is): slot-0 bootstrap that
-// records the peer's __handshake TELL.
+// The driver side (what the launcher/runner is): slot-0 bootstrap. sessions.md
+// §2a retired the proactive __handshake TELL — the responder is silent until it
+// receives a propose-session, then replies with an ack-session. This driver
+// records whether ANY legacy __handshake arrives (it MUST NOT) and otherwise
+// drives the connector leg.
 class DriverBootstrap : public Handle {
  public:
   static std::shared_ptr<DriverBootstrap> make() {
@@ -72,34 +75,16 @@ class DriverBootstrap : public Handle {
                                    const Value&) override {
     return ValueHandle::make_broken("legion://errors/UnknownMessage");
   }
-  void tell(std::string_view msg, const Value& data) override {
+  void tell(std::string_view msg, const Value&) override {
     if (msg == "__handshake") {
-      handshake = data;
-      has_handshake = true;
+      saw_handshake = true;  // §2a: the legacy frame must NEVER fire.
     }
   }
-  Value handshake;
-  bool has_handshake = false;
+  bool saw_handshake = false;
 
  private:
   Value self_{std::string("driver")};
 };
-
-std::set<std::string> StringSet(const Value* arr) {
-  std::set<std::string> out;
-  if (arr && arr->is_array()) {
-    for (const Value& v : arr->as_array()) {
-      if (v.is_string()) {
-        out.insert(v.as_string());
-      }
-    }
-  }
-  return out;
-}
-
-std::set<std::string> StringSet(const std::vector<std::string>& v) {
-  return std::set<std::string>(v.begin(), v.end());
-}
 
 }  // namespace
 
@@ -240,31 +225,41 @@ IN_PROC_BROWSER_TEST_F(AurelianConformanceServeBrowserTest,
   auto driver_bs = DriverBootstrap::make();
   Dispatcher driver(driver_bs,
                     [this](const std::string& f) { WriteLine(f); });
+  std::string ack_frame;
   auto pump = [&]() {
     std::string line;
     while (PopLine(&line)) {
+      if (line.find("\"op\":\"ack-session\"") != std::string::npos) {
+        ack_frame = line;
+      }
       driver.on_inbound(line);
     }
     driver.pump_pending_answers();
   };
 
-  // 1. FIRST the __handshake TELL, buffered from startup: wireFacets ≡ the
-  // computed claims set EXACTLY (floor included), internalFacets ≡ the
-  // claimed internal rows (design §3.2/§3.5 — manifest ≡ table).
-  for (int i = 0; i < 4000 && !driver_bs->has_handshake; ++i) {
+  // 1. sessions.md §2a: the peer is a RESPONDER — silent until it receives a
+  // propose-session, then it replies with an ack-session carrying ITS facet
+  // manifest (supports ≡ aurelian_claimed_wire_facets(), peer ==
+  // legion://peers/aurelian), and NEVER a proactive __handshake TELL (the legacy
+  // frame is retired). Drive the connector's propose; capture the ack.
+  driver.emit_propose_session();
+  for (int i = 0; i < 4000 && ack_frame.empty(); ++i) {
     pump();
     base::PlatformThread::Sleep(base::Milliseconds(1));
   }
-  ASSERT_TRUE(driver_bs->has_handshake)
-      << "the serve must emit the __handshake facet manifest at "
-         "session-establish (facets.md §6a)";
-  EXPECT_EQ(StringSet(driver_bs->handshake.object_get("wireFacets")),
-            StringSet(aurelian_claimed_wire_facets()))
-      << "wireFacets must equal aurelian_claimed_wire_facets() exactly";
-  EXPECT_EQ(StringSet(driver_bs->handshake.object_get("internalFacets")),
-            StringSet(aurelian_claimed_internal_facets()))
-      << "internalFacets must equal aurelian_claimed_internal_facets() "
-         "exactly";
+  ASSERT_FALSE(ack_frame.empty())
+      << "the §2a responder must reply to propose-session with an ack-session "
+         "(sessions.md §2a.3 / [SESSION-MANIFEST-IN-HANDSHAKE-ENVELOPE])";
+  ASSERT_FALSE(driver_bs->saw_handshake)
+      << "the legacy proactive __handshake TELL must be retired (sessions.md §2a)";
+  EXPECT_NE(ack_frame.find("\"peer\":\"legion://peers/aurelian\""),
+            std::string::npos)
+      << "the ack manifest must advertise legion://peers/aurelian, got: "
+      << ack_frame;
+  for (const std::string& facet : aurelian_claimed_wire_facets()) {
+    EXPECT_NE(ack_frame.find(facet), std::string::npos)
+        << "the ack manifest 'supports' must carry claimed wire facet " << facet;
+  }
 
   // 2. ping -> resolved "pong" over the wire (the vendored corpus verb on
   // the unified slot-0 surface).
