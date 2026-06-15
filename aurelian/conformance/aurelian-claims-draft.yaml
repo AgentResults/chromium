@@ -9,8 +9,10 @@
 # aurelian column at CF-10's flip. Kept in LOCKSTEP with facet_claims.{h,cc}
 # (the compiled projection of the claimed rows).
 #
-# Census snapshot (re-verified 2026-06-11 against Legion e619076303 corpus):
-# 692 sub-facet entries, 385 distinct facets. Statuses are written for the
+# Census snapshot (re-verified 2026-06-15 against origin/main corpus, the
+# W3-S7 search vectors f98f6c1bcd landed): 700 sub-facet entries, 388 distinct
+# facets (was 692/385 @ e619076303 — the +8/+3 delta is the core/search/v0.2
+# additions: the 3 new search sub-facets are rowed queued/CF-EXT below). Statuses are written for the
 # moment CF-10 lands; the §3.3 closure rule executes at CF-V (red claimed →
 # queued downgrade or core-DEFECT block; green CF-V-mandatory queued → flip).
 #
@@ -31,7 +33,7 @@ expected-lane: { impl-driving: 62 }
 meta:
   id: aurelian
   design: AURELIAN-CONFORMANT-FEDERATION-DESIGN.md §3.3b (Legion da18161e79)
-  census: { entries: 692, distinct-facets: 385, legion: e619076303 }
+  census: { entries: 700, distinct-facets: 388, legion: origin/main-f98f6c1bcd }
   prefix: "legion://facets/"   # every facet below elides this prefix
 
 # === CLAIMED (wire axis) — MUST equal facet_claims.cc's wire projection ===
@@ -189,6 +191,17 @@ queued:
   - { facet: template/closed-grammar, sliceRef: CF-EXT }
   - { facet: search, sliceRef: CF-EXT }
   - { facet: search/federated-fallback, sliceRef: CF-EXT }
+  # search sub-facets (search.md §2/§3/§4/§10): same search facility,
+  # queued under CF-EXT consistent with the parent search row. Aurelian serves
+  # NO search facet (zero in the CF-2 handshake capture, zero in facet_claims.cc),
+  # so these are NOT claimed/exhibited v1 — they ride the same QuickJS kind-host
+  # precondition the parent does. Each re-claims at CF-EXT when search ships live.
+  - { facet: search/wire-exact-name-precedence, sliceRef: CF-EXT,
+      note: search.md §2 exact-name precedence tier; search facility queued (parent search) }
+  - { facet: search/wire-typed-results, sliceRef: CF-EXT,
+      note: search.md §4/§10.6 MethodSearchResult + per-row source attribution; search facility queued (parent search) }
+  - { facet: search/wire-preferred-for-routing, sliceRef: CF-EXT,
+      note: search.md §3 preferred-for intent-routing tier; search facility queued (parent search) }
   - { facet: datastore/create-entity-handle, sliceRef: CF-EXT }
   - { facet: datastore/subscription, sliceRef: CF-EXT }
   - { facet: datastore/typed-invariants, sliceRef: CF-EXT }
