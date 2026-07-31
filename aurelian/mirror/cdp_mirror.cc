@@ -91,15 +91,28 @@ class CdpMirrorNode : public Handle {
     if (msg == "invoke" && kind_ == Kind::kCommand) {
       return Invoke(spec);
     }
-    // ACM-4: subscribe({sink}) on an event node — a CDP event subscription
+    // ACM-4: legion-subscribe({sink}) on an event node — a CDP event subscription
     // IS a handle subscription (design section 3), behind the SAME
     // session-context gate as invoke (design section 2 round-4: never
     // accepted-but-silently-event-less).
-    if (msg == "subscribe" && kind_ == Kind::kEvent) {
+    //
+    // The message is `legion-subscribe`, the NORMATIVE substrate name
+    // (spec/facilities/subscribe.md section 1 [SUBSCRIBE-UNIFORM-CALL-SHAPE],
+    // spec/foundations/handle.md section 6.4 [HANDLE-LEGION-MESSAGE-FAMILY-RESERVED]).
+    // It was previously the bare `subscribe`, which NO spec-conformant caller
+    // sends — the MCP bridge, like every other substrate consumer, asks
+    // `legion-subscribe`. The mirror therefore never matched, fell through to
+    // Child("legion-subscribe"), and the caller was handed a subscription that
+    // could never deliver an event (found live 2026-07-31: subscribing to
+    // Page.frameNavigated and Page.screencastFrame drained 0 events forever).
+    if (msg == "legion-subscribe" && kind_ == Kind::kEvent) {
       return Subscribe(spec);
     }
-    // Reserved / unwrap probes never fall through to catalog lookup.
-    if (!msg.empty() && msg.front() == '_') {
+    // Reserved families never fall through to catalog lookup: `__` probes and
+    // the substrate's `legion-` facility messages (handle.md section 6.4). A
+    // `legion-*` message this node does not answer is UNKNOWN — resolving it as
+    // a child name is what silently turned a failed subscribe into a node.
+    if (!msg.empty() && (msg.front() == '_' || msg.rfind("legion-", 0) == 0)) {
       return ValueHandle::make_broken("unknown-message");
     }
     return Child(std::string(msg));

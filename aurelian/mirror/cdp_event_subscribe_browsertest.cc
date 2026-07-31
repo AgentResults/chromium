@@ -150,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpEventSubscribeBrowserTest,
 
   auto sink = std::make_shared<RecordingSink>();
   std::shared_ptr<Handle> sub =
-      event_node->ask("subscribe", SinkSpec(sink));
+      event_node->ask("legion-subscribe", SinkSpec(sink));
   ASSERT_NE(sub, nullptr);
   ASSERT_NE(sub->state_kind(), StateKind::Broken)
       << "no event fan-in: " << sub->broken_reason();
@@ -220,7 +220,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpEventSubscribeBrowserTest,
 
   auto sink = std::make_shared<RecordingSink>();
   std::shared_ptr<Handle> sub =
-      event_node->ask("subscribe", SinkSpec(sink));
+      event_node->ask("legion-subscribe", SinkSpec(sink));
   ASSERT_NE(sub->state_kind(), StateKind::Broken)
       << "no event fan-in: " << sub->broken_reason();
   ASSERT_TRUE(AwaitSubscriptionEffective(sub_mirror));
@@ -256,7 +256,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpEventSubscribeBrowserTest,
   ASSERT_NE(browser_event->state_kind(), StateKind::Broken)
       << browser_event->broken_reason();
   std::shared_ptr<Handle> refused =
-      browser_event->ask("subscribe", SinkSpec(sink));
+      browser_event->ask("legion-subscribe", SinkSpec(sink));
   ASSERT_EQ(refused->state_kind(), StateKind::Broken)
       << "accepted-but-silently-event-less at the browser mirror";
   std::string reason(refused->broken_reason());
@@ -282,7 +282,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpEventSubscribeBrowserTest,
         Walk(sub_mirror, {domain.c_str(), events.front().c_str()});
     ASSERT_NE(node->state_kind(), StateKind::Broken)
         << node->broken_reason();
-    std::shared_ptr<Handle> r = node->ask("subscribe", SinkSpec(sink));
+    std::shared_ptr<Handle> r = node->ask("legion-subscribe", SinkSpec(sink));
     ASSERT_EQ(r->state_kind(), StateKind::Broken)
         << domain << "." << events.front()
         << " accepted-but-silently-event-less at a page sub-mirror";
