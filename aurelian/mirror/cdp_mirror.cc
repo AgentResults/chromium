@@ -96,15 +96,13 @@ class CdpMirrorNode : public Handle {
     // session-context gate as invoke (design section 2 round-4: never
     // accepted-but-silently-event-less).
     //
-    // The message is `legion-subscribe`, the NORMATIVE substrate name
-    // (spec/facilities/subscribe.md section 1 [SUBSCRIBE-UNIFORM-CALL-SHAPE],
-    // spec/foundations/handle.md section 6.4 [HANDLE-LEGION-MESSAGE-FAMILY-RESERVED]).
-    // It was previously the bare `subscribe`, which NO spec-conformant caller
-    // sends — the MCP bridge, like every other substrate consumer, asks
-    // `legion-subscribe`. The mirror therefore never matched, fell through to
-    // Child("legion-subscribe"), and the caller was handed a subscription that
-    // could never deliver an event (found live 2026-07-31: subscribing to
-    // Page.frameNavigated and Page.screencastFrame drained 0 events forever).
+    // The message name is `legion-subscribe`, the normative substrate name
+    // (spec/facilities/subscribe.md section 1 [SUBSCRIBE-UNIFORM-CALL-SHAPE];
+    // spec/foundations/handle.md section 6.4 reserves the `legion-` family).
+    // It was previously the bare `subscribe`, which no spec-conformant caller
+    // sends, so the mirror never matched and fell through to Child(), handing
+    // back a node instead of a subscription (found 2026-07-31: subscribing to
+    // Page.frameNavigated drained 0 events forever, with no error).
     if (msg == "legion-subscribe" && kind_ == Kind::kEvent) {
       return Subscribe(spec);
     }
