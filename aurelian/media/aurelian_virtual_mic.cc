@@ -4,6 +4,10 @@
 
 #include "aurelian/media/aurelian_virtual_mic.h"
 
+#include <cerrno>
+
+#include "base/logging.h"
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -50,7 +54,15 @@ AurelianVirtualMic::~AurelianVirtualMic() {
 }
 
 void AurelianVirtualMic::Start() {
-  if (!OpenRing(DefaultShmPath())) {
+  const std::string path = DefaultShmPath();
+  if (!OpenRing(path)) {
+    // NEVER silent. The browser runs with device-count=0 so that
+    // getUserMedia({audio}) resolves to THIS mic; if the ring does not open,
+    // there is no audio input at all and every getUserMedia hangs forever with
+    // no diagnostic. A device that failed to start must SAY SO.
+    LOG(ERROR) << "[aurelian] virtual mic FAILED to open its ring at " << path
+               << " (errno=" << errno << ") — getUserMedia({audio}) will never "
+                  "resolve, because device-count=0 leaves no other input";
     return;
   }
   // Drain TTS into the ring at audio cadence. The reader pulls from read_pos on
