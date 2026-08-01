@@ -7,8 +7,7 @@
 #include <memory>
 #include <optional>
 
-#include "base/json/json_writer.h"
-#include "base/values.h"
+#include "aurelian/handles/root/wire_serialize.h"
 #include "chrome/browser/asmodeus/credential_store.h"
 #include "velite/agentspaces-wire/handle.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
@@ -54,17 +53,16 @@ class CredentialsHandle : public Handle {
       if (!acct) {
         return ValueHandle::make_broken("not-found");
       }
-      // Read view — deliberately omits the password.
-      auto quote = [](const std::string& s) {
-        std::string out;
-        base::JSONWriter::Write(base::Value(s), &out);
-        return out;
-      };
-      std::string json = "{\"name\":" + quote(acct->name) +
-                         ",\"email\":" + quote(acct->email) +
-                         ",\"voiceModel\":" + quote(acct->voice_model) +
-                         ",\"profile\":" + quote(acct->profile) + "}";
-      return ValueHandle::make(Value(json));
+      // Read view — deliberately omits the password. A STRUCTURED value:
+      // the previous hand-concatenated JSON string made the answer
+      // indistinguishable from a string that merely looks like JSON, and
+      // duplicated escaping the one marshaller already does.
+      return ValueHandle::make(Value::make_object({
+          {"name", Value(acct->name)},
+          {"email", Value(acct->email)},
+          {"voiceModel", Value(acct->voice_model)},
+          {"profile", Value(acct->profile)},
+      }));
     }
     return ValueHandle::make_broken("not-callable");
   }
@@ -92,29 +90,17 @@ void DestroyCredentialsHandle(void* handle) {
   delete static_cast<Holder*>(handle);
 }
 
-std::string CredentialsHandleAsk(void* handle,
-                                 const std::string& verb,
-                                 const std::string& param) {
+WireReply CredentialsHandleAsk(void* handle,
+                               const std::string& verb,
+                               const std::string& param) {
   auto* holder = static_cast<Holder*>(handle);
   if (!holder || !holder->handle) {
-    return "broken:null-handle";
+    return WireReply::MakeBroken("null-handle");
   }
   Value spec = param.empty() ? Value(std::string()) : Value(param);
-  std::shared_ptr<Handle> result = holder->handle->ask(verb, spec);
-  if (!result) {
-    return "broken:null";
-  }
-  if (result->state_kind() == StateKind::Broken) {
-    return std::string("broken:") + std::string(result->broken_reason());
-  }
-  const Value& v = result->resolved_value();
-  if (v.is_int()) {
-    return std::to_string(v.as_int());
-  }
-  if (v.is_string()) {
-    return v.as_string();
-  }
-  return "{}";
+  // The ONE serializer. This shim used to carry its own copy, which rendered
+  // a refusal as the string "broken:<reason>" and every richer value as text.
+  return SerializeWireReply(holder->handle->ask(verb, spec));
 }
 
 }  // namespace aurelian

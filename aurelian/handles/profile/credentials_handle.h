@@ -13,6 +13,8 @@
 
 #include <string>
 
+#include "aurelian/handles/root/wire_reply.h"
+
 namespace asmodeus {
 class CredentialStore;
 }
@@ -24,14 +26,18 @@ namespace aurelian {
 void* CreateCredentialsHandle(asmodeus::CredentialStore* store);
 void DestroyCredentialsHandle(void* handle);
 
-// Dispatches an ask through the Velite handle and serializes the reply:
-//   "size"            -> account count (decimal)
+// Dispatches an ask through the Velite handle and renders the reply with the
+// ONE wire serializer (handles/root/wire_serialize.h) — this shim owns no
+// serialization of its own. Verbs:
+//   "size"            -> the account count, as a number
 //   "phone"           -> the 2FA phone string
-//   "account" + name  -> JSON {name,email,voiceModel,profile} or broken:not-found
-// A broken reply is "broken:<reason>".
-std::string CredentialsHandleAsk(void* handle,
-                                 const std::string& verb,
-                                 const std::string& param);
+//   "account" + name  -> an OBJECT {name,email,voiceModel,profile}
+// A refusal comes back Kind::kBroken carrying its bare reason ("not-found",
+// "bad-spec", "not-callable", "null-handle"); it is never a value whose text
+// begins "broken:". WireReply is velite-free, so this header stays so too.
+WireReply CredentialsHandleAsk(void* handle,
+                               const std::string& verb,
+                               const std::string& param);
 
 }  // namespace aurelian
 

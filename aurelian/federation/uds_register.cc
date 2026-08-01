@@ -584,6 +584,13 @@ struct UdsRegister::Impl {
   std::shared_ptr<velite::UdsChannel> channel;
   std::shared_ptr<Dispatcher> disp;
   std::thread serve_thread;
+  // The register Mount + propose-session emissions, deferred out of Start()
+  // and run as the serve thread's first act. They are ordinary wire writes,
+  // and the propose carries the ~9.5 KB facet manifest — larger than a UDS
+  // send buffer — so emitting them on the CALLER's thread blocked it until a
+  // reader drained, for up to the write-stall budget. Start must not wait on
+  // the peer; the serve thread owns every emission.
+  std::function<void()> handshake_;
   std::atomic<bool> stop{false};
   std::atomic<bool> connected{false};
   std::string dest_hash;
@@ -600,6 +607,13 @@ struct UdsRegister::Impl {
   // framing-preserved contract; CF-4 found the wedge when an early exit
   // stopped the reads). Only a hard channel close ends the loop.
   void Serve() {
+    // The handshake is the serve thread's FIRST act (see handshake_ above):
+    // Start returns as soon as the socket is connected, and these writes wait
+    // on the peer here, off the caller's thread, where waiting is harmless.
+    if (handshake_) {
+      handshake_();
+      handshake_ = nullptr;
+    }
     auto buf = std::make_unique<uint8_t[]>(kRxBuffer);
     RunServeLoop(
         stop, *disp,
@@ -706,17 +720,26 @@ bool UdsRegister::Start(const std::string& socket_path,
        Value(std::string("legion://types/RegisteredEmbodimentHandle"))},
       {"params", std::move(params)},
   });
-  impl_->disp->emit_ask(0, "update", std::move(mount));
-
+  // Both handshake frames are DEFERRED to the serve thread. Emitting them
+  // here would block this thread until the peer drained: the propose below
+  // carries the full facet manifest (~9.5 KB), well past a UDS send buffer.
+  //
   // sessions.md §2a — the register-in peer is the CONNECTOR: declare Aurelian's
   // OWN facet manifest, then emit a propose-session carrying it on THIS wire (the
   // responder — Agrippa — answers with its ack-session in on_inbound). The legacy
   // proactive __handshake emitter (emit_session_handshake_with_facets) is retired;
   // set_local_facet_claims makes the propose advertise Aurelian, not velite-cpp.
-  impl_->disp->set_local_facet_claims(aurelian_claimed_wire_facets(),
-                                      aurelian_claimed_internal_facets(),
-                                      "legion://peers/aurelian");
-  impl_->disp->emit_propose_session();
+  {
+    Impl* impl = impl_.get();
+    Value pending_mount = std::move(mount);
+    impl_->handshake_ = [impl, pending_mount]() mutable {
+      impl->disp->emit_ask(0, "update", std::move(pending_mount));
+      impl->disp->set_local_facet_claims(aurelian_claimed_wire_facets(),
+                                         aurelian_claimed_internal_facets(),
+                                         "legion://peers/aurelian");
+      impl->disp->emit_propose_session();
+    };
+  }
 
   impl_->connected.store(true);
   impl_->stop.store(false);

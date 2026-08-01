@@ -691,6 +691,7 @@ if (enable_aurelian) {
     ]
 
     deps = [
+      ":aurelian_wire_serialize",
       "//base",
       "//chrome/browser/asmodeus:asmodeus_automation_core",
       "//velite",

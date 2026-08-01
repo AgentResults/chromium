@@ -144,6 +144,80 @@ TEST(AurelianUdsRegisterTest, DialsAndSendsRegisterMountFrame) {
   EXPECT_NE(frame.find("chrome"), std::string::npos) << frame;
 }
 
+// AU-START-NONBLOCKING (RED-first): Start() must RETURN without waiting for
+// the peer to drain the wire.
+//
+// Start emits two frames before it spawns the serve thread: the register
+// Mount, and the propose-session carrying Aurelian's facet manifest. That
+// manifest is ~9.5 KB (96 claimed facets) — larger than a UDS send buffer
+// (~8 KB on macOS). Emitting it on the CALLER's thread means Start blocks in
+// write_all until someone reads, and write_all gives up after a 30 s stall
+// budget. Whoever called Start is stuck for those 30 seconds.
+//
+// In this test the caller is also the only thread that could drain, so the
+// old code deadlocks outright. In production the caller is the browser main
+// thread and the drain is Agrippa in another process — so it "worked", while
+// leaving the browser one slow reader away from a 30-second main-thread
+// stall and a failed handshake. Blocking a caller on a wire write is the
+// [HANDLE-VERBS-ONE-WAY] violation regardless of who happens to drain.
+//
+// The property: Start returns promptly even when NOTHING is reading, and the
+// frames it owes still arrive once the peer does read.
+TEST(AurelianUdsRegisterTest, StartDoesNotBlockOnPeerDrain) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  const std::string path = TempSock();
+  ::unlink(path.c_str());
+
+  velite::UdsListener listener;
+  ASSERT_TRUE(listener.listen(path.c_str()));
+
+  UdsRegister reg;
+  const base::TimeTicks began = base::TimeTicks::Now();
+  // Deliberately NOT accepting or reading first: nothing drains this wire
+  // until after Start has returned.
+  ASSERT_TRUE(reg.Start(path, "chrome", "uds-unittest-seed",
+                        [](const std::string&, const std::string&) {
+                          return FakeCompleted("x");
+                        },
+                        /*cap_anchor=*/{}));
+  const base::TimeDelta took = base::TimeTicks::Now() - began;
+
+  EXPECT_LT(took, base::Seconds(5))
+      << "Start blocked " << took.InSecondsF()
+      << "s waiting for a reader — it emitted a buffer-exceeding frame on the "
+         "calling thread";
+
+  // The frames are still owed, and arrive once the peer drains.
+  velite::UdsChannel server;
+  velite::UdsListener::AcceptOutcome out =
+      velite::UdsListener::AcceptOutcome::NoneReady;
+  for (int i = 0;
+       i < 2000 && out != velite::UdsListener::AcceptOutcome::Accepted; ++i) {
+    out = listener.accept(server, nullptr);
+    if (out == velite::UdsListener::AcceptOutcome::NoneReady) {
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+  }
+  ASSERT_EQ(out, velite::UdsListener::AcceptOutcome::Accepted);
+
+  std::string seen;
+  auto buf = std::make_unique<uint8_t[]>(65536);
+  for (int i = 0; i < 4000 && seen.find("Mount") == std::string::npos; ++i) {
+    size_t n = 0;
+    if (server.recv(buf.get(), 65536, &n) == velite::ChannelError::OK && n > 0) {
+      seen.append(reinterpret_cast<const char*>(buf.get()), n);
+    } else {
+      base::PlatformThread::Sleep(base::Milliseconds(1));
+    }
+  }
+  reg.Stop();
+  ::unlink(path.c_str());
+
+  EXPECT_NE(seen.find("Mount"), std::string::npos)
+      << "the register frame never arrived";
+  EXPECT_NE(seen.find("chrome"), std::string::npos);
+}
+
 // A forwarded dispatchAt{uri,verb} resolves through the register-in to the
 // injected ChromeDispatchFn and the value round-trips over the real UDS.
 TEST(AurelianUdsRegisterTest, ForwardedDispatchAtResolvesViaDispatch) {
@@ -510,7 +584,14 @@ TEST(AurelianUdsRegisterTest, SlotRefBearingSpecRefusedTyped) {
   ASSERT_TRUE(o.settled);
   EXPECT_FALSE(o.ok)
       << "a slot-ref-bearing spec must be refused typed; it dispatched";
-  EXPECT_NE(o.reason.find("SlotRefInSpec"), std::string::npos) << o.reason;
+  // TEST-CHANGE (AU-ERRORS-WIRE-PAIR): the reason is the KEBAB wire code and
+  // the typed URI rides in `code` — errors.md 3.1
+  // [ERRORS-WIRE-REASON-IS-KEBAB-WIRECODE] +
+  // [ERRORS-WIRE-CODE-CARRIES-TYPED-URI]. Asserting the URI inside `reason`
+  // asserted the one thing the spec forbids there; it only ever looked green
+  // because the whole suite was wedged on the Start() write stall.
+  EXPECT_EQ(o.reason, "slot-ref-in-spec") << o.reason;
+  EXPECT_EQ(o.code, "legion://errors/SlotRefInSpec") << o.code;
   EXPECT_FALSE(dispatched.load())
       << "the spec was silently flattened into a dispatch";
 }
