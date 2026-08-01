@@ -173,6 +173,13 @@ class AurelianVirtualCameraBrowserTest : public InProcessBrowserTest {
     // sanctioned config for virtual devices (see
     // content/browser/webrtc/webrtc_video_capture_shared_device_browsertest).
     command_line->AppendSwitch(switches::kDisableVideoCaptureUseGpuMemoryBuffer);
+    // TtsAudioFlowsThroughMic drives the AUDIO half too, and the virtual mic is
+    // only the default input when it is SELECTED: without this flag
+    // GetDefaultInputDeviceID() returns the real hardware mic, which
+    // device-count=0 leaves unopenable, so getUserMedia({audio}) hangs. The
+    // same flag makes AurelianVirtualMic::DefaultShmPath() write the file the
+    // reader opens.
+    command_line->AppendSwitchASCII(switches::kAsmodeusDevice, "aurelian");
   }
 
   void SetUpOnMainThread() override {

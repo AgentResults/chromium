@@ -63,6 +63,14 @@ class AurelianAudioHandleBrowserTest : public InProcessBrowserTest {
     // permission; allow the asmodeus AudioContext to resume without a gesture.
     command_line->AppendSwitchASCII(switches::kUseFakeDeviceForMediaStream,
                                     "device-count=0");
+    // SELECT the virtual mic. Without this, GetDefaultInputDeviceID() returns
+    // the REAL hardware input, and with device-count=0 there is nothing to
+    // open, so getUserMedia({audio}) hangs until the test times out. The flag
+    // makes the Aurelian ring both the enumerated device
+    // (audio_manager_mac :: AsmodeusDiscoverDevices) and the default input, and
+    // AurelianVirtualMic::DefaultShmPath() now honours the same flag so the
+    // producer writes the file the reader opens.
+    command_line->AppendSwitchASCII(switches::kAsmodeusDevice, "aurelian");
     command_line->AppendSwitch(switches::kUseFakeUIForMediaStream);
     command_line->AppendSwitchASCII("autoplay-policy",
                                     "no-user-gesture-required");

@@ -6,7 +6,9 @@
 
 #include <cerrno>
 
+#include "base/command_line.h"
 #include "base/logging.h"
+#include "media/base/media_switches.h"
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -42,9 +44,21 @@ float* RingAt(void* base) {
 // static
 std::string AurelianVirtualMic::DefaultShmPath() {
   const char* home = std::getenv("HOME");
-  // The reader (FakeAudioInputStream) uses ~/.asmodeus/ because /tmp is blocked
-  // by the macOS sandbox; match it exactly.
-  return std::string(home ? home : "/tmp") + "/.asmodeus/audio-in.shm";
+  const std::string dir = std::string(home ? home : "/tmp") + "/.asmodeus/";
+  // MIRROR the reader EXACTLY — fake_audio_input_stream.cc ::
+  // GetAsmodeusAudioInPath(). It honours --asmodeus-device and reads
+  // audio-in-<name>.shm; this producer used to write the un-suffixed
+  // audio-in.shm unconditionally, so with the flag set the two named DIFFERENT
+  // files and the agent's voice never reached the mic. The named form is also
+  // the only one audio_manager_mac :: AsmodeusDiscoverDevices() enumerates as a
+  // device (it requires the dash and a name), which is what makes the virtual
+  // mic selectable as the default input at all.
+  auto* cmd = base::CommandLine::ForCurrentProcess();
+  if (cmd && cmd->HasSwitch(switches::kAsmodeusDevice)) {
+    return dir + "audio-in-" +
+           cmd->GetSwitchValueASCII(switches::kAsmodeusDevice) + ".shm";
+  }
+  return dir + "audio-in.shm";
 }
 
 AurelianVirtualMic::AurelianVirtualMic() = default;
