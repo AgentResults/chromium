@@ -30,6 +30,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "velite/agentspaces-wire/dispatcher.hpp"
 #include "velite/agentspaces-wire/handle.hpp"
+#include "velite/agentspaces-wire/marshal.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
 #include "velite/channel.hpp"
 #include "velite/uds_channel.hpp"
@@ -76,18 +77,15 @@ class HubBootstrap : public Handle {
     }
     return ValueHandle::make_broken("legion://errors/UnknownMessage");
   }
-  // CF-4: the register-in wire must carry the __handshake facet manifest
-  // (facets.md §6a) after the Mount ask.
-  void tell(std::string_view msg, const Value& data) override {
-    if (msg == "__handshake") {
-      handshake = data;
-      has_handshake = true;
-    }
-  }
+  // The register-in wire carries the facet manifest on the sessions.md §2a
+  // propose-session ENVELOPE, which the Dispatcher's session layer consumes —
+  // it never reaches a bootstrap handle. The legacy proactive __handshake TELL
+  // this once watched for is RETIRED (uds_register.cc says so), so watching for
+  // it meant asserting a frame nothing sends. The manifest is captured off the
+  // raw wire in the test body instead.
+  void tell(std::string_view, const Value&) override {}
   std::string registered;
   std::string child_dest_hash;
-  Value handshake;
-  bool has_handshake = false;
 
  private:
   Value self_{std::string("hub")};
@@ -400,12 +398,29 @@ IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
     raw->send(reinterpret_cast<const uint8_t*>(f.data()), f.size());
   });
   uint8_t buf[65536];
+  // facets.md §6a: the connector advertises its manifest inline on the
+  // propose-session envelope (sessions.md §2a.2). Captured HERE, off the raw
+  // frame, because the session layer handles it before any handle sees it.
+  Value proposed_manifest;
+  bool has_manifest = false;
   auto pump_hub = [&]() {
     for (;;) {
       size_t n = 0;
       if (server.recv(buf, sizeof(buf), &n) == velite::ChannelError::OK &&
           n > 0) {
-        hub.on_inbound(std::string(reinterpret_cast<const char*>(buf), n));
+        const std::string frame(reinterpret_cast<const char*>(buf), n);
+        if (!has_manifest) {
+          if (auto env = velite::agentspaces::marshal::decode(frame)) {
+            const Value* op = env->is_object() ? env->object_get("op") : nullptr;
+            if (op && op->is_string() && op->as_string() == "propose-session") {
+              if (const Value* m = env->object_get("manifest")) {
+                proposed_manifest = *m;
+                has_manifest = true;
+              }
+            }
+          }
+        }
+        hub.on_inbound(frame);
       } else {
         break;
       }
@@ -418,19 +433,25 @@ IN_PROC_BROWSER_TEST_F(AurelianBootRegisterBrowserTest,
         FROM_HERE, loop.QuitClosure(), base::Milliseconds(5));
     loop.Run();
   };
-  for (int i = 0; i < 800 && !hub_bs->has_handshake; ++i) {
+  for (int i = 0; i < 800 && !has_manifest; ++i) {
     pump_hub();
     spin();
   }
-  ASSERT_TRUE(hub_bs->has_handshake)
-      << "a __handshake TELL must follow the register ask (facets.md §6a)";
+  ASSERT_TRUE(has_manifest)
+      << "a propose-session carrying this peer's facet manifest must follow "
+         "the register ask (facets.md §6a + sessions.md §2a.2)";
 
+  // The manifest carries claimed wire facets under `supports`, as
+  // {facet, versionMin, versionMax} entries (Dispatcher::build_own_facet_manifest_)
+  // — not a flat `wireFacets` string array, which is the shape the retired
+  // __handshake payload used.
   std::set<std::string> wire;
-  if (const Value* arr = hub_bs->handshake.object_get("wireFacets");
+  if (const Value* arr = proposed_manifest.object_get("supports");
       arr && arr->is_array()) {
-    for (const Value& v : arr->as_array()) {
-      if (v.is_string()) {
-        wire.insert(v.as_string());
+    for (const Value& entry : arr->as_array()) {
+      if (!entry.is_object()) continue;
+      if (const Value* f = entry.object_get("facet"); f && f->is_string()) {
+        wire.insert(f->as_string());
       }
     }
   }

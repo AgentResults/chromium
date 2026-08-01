@@ -298,11 +298,19 @@ IN_PROC_BROWSER_TEST_F(AurelianConformanceServeBrowserTest,
   EXPECT_FALSE(gr_ans.ok)
       << "an unclaimed facility must NOT be acquirable "
          "([LAYERS-NO-CONFORMANCE-BY-OMISSION])";
-  EXPECT_NE(gr_ans.reason.find(
-                "legion://errors/FacetNotClaimed:facility/legion://datastore"),
-            std::string::npos)
-      << "the decline must be the typed not-claimed signal, got: "
-      << gr_ans.reason;
+  // TEST-CHANGE (AU-ERRORS-WIRE-PAIR): this asserted the typed URI inside
+  // `reason`, which errors.md 3.1 forbids — [ERRORS-WIRE-REASON-IS-KEBAB-WIRECODE]
+  // puts the kebab wireCode in `reason` and [ERRORS-WIRE-CODE-CARRIES-TYPED-URI]
+  // puts the URI in `code`. It also named the wrong namespace: the error is a
+  // Level-2 extension, `legion://errors/velite-cpp/FacetNotClaimed`, and an
+  // extension code KEEPS its namespace
+  // ([ERRORS-EXTENSION-CODE-SUBSUMES-TO-LEVEL1]). The discriminator naming WHICH
+  // facility was declined is diagnostic detail and rides `details`, never the
+  // reason.
+  EXPECT_EQ(gr_ans.reason, "facet-not-claimed")
+      << "the decline must be the kebab wireCode, got: " << gr_ans.reason;
+  EXPECT_EQ(gr_ans.code, "legion://errors/velite-cpp/FacetNotClaimed")
+      << "the typed URI rides `code`, got: " << gr_ans.code;
 }
 
 }  // namespace aurelian
