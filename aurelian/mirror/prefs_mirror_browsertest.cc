@@ -162,7 +162,11 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
       RootDispatch(root, std::string("prefs/") + kInertPref + "/set",
                    "{\"value\":\"not-a-bool\"}")
           .reply.payload;
-  EXPECT_EQ(reply.rfind("broken:pref-type-mismatch", 0), 0u) << reply;
+  // TEST-CHANGE (AU-WIRE-KIND): the payload is the BARE reason now — the kind
+  // says it is a refusal, so the text no longer repeats it. My migration sweep
+  // rewrote .reply to .reply.payload here but left the old "broken:" prefix in
+  // the expected string.
+  EXPECT_EQ(reply.rfind("pref-type-mismatch", 0), 0u) << reply;
   EXPECT_EQ(LivePrefs()->GetBoolean(prefs::kShowHomeButton), original);
 
   // A set with no value field is typed too.

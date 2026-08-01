@@ -123,7 +123,12 @@ IN_PROC_BROWSER_TEST_F(AurelianServicesMirrorBrowserTest,
   WireReply invoke_reply =
       RootDispatch(root, "services/" + name + "/invoke").reply;
   EXPECT_TRUE(invoke_reply.is_broken()) << invoke_reply;
-  EXPECT_EQ(invoke_reply.payload, "no-invoke-surface") << invoke_reply;
+  // A PREFIX, not equality: this reason carries a colon-suffixed explanation
+  // ("no-invoke-surface: C++ has no runtime method reflection; ..."), which is
+  // the honest-refusal detail the test name refers to. My migration used EQ and
+  // dropped it.
+  EXPECT_EQ(invoke_reply.payload.rfind("no-invoke-surface", 0), 0u)
+      << invoke_reply;
 
   EXPECT_TRUE(RootDispatch(root, "services/NoSuchService/__getType").reply.is_broken());
   EXPECT_EQ(RootDispatch(root, "services/NoSuchService/__getType").reply.payload, "unknown-service");

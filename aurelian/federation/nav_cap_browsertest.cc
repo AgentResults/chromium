@@ -236,9 +236,13 @@ IN_PROC_BROWSER_TEST_F(AurelianNavCapBrowserTest,
   Dispatcher::AnswerOutcome info =
       LeafAsk(in_tree.value.as_slot_ref().slot, "info");
   EXPECT_TRUE(info.settled && info.ok) << info.reason;
-  EXPECT_TRUE(info.value.is_string() &&
-              info.value.as_string().find("browserPid") != std::string::npos)
+  // TEST-CHANGE (AU-WIRE-KIND): system/info is a STRUCTURED answer now, not
+  // JSON-in-a-string. is_string() compiles fine against an object, so the build
+  // could not catch this — the reason the migration missed it.
+  ASSERT_TRUE(info.value.is_object())
       << "the bound handle's in-subtree leaf ask must reach the real node";
+  EXPECT_NE(info.value.object_get("browserPid"), nullptr)
+      << "the real node's info must carry browserPid";
 
   // Out-of-subtree acquisition under the SAME cap refuses typed, and no
   // handle exists to ask.
@@ -306,8 +310,9 @@ IN_PROC_BROWSER_TEST_F(AurelianNavCapBrowserTest,
   Dispatcher::AnswerOutcome info =
       LeafAsk(child_in.value.as_slot_ref().slot, "info");
   EXPECT_TRUE(info.settled && info.ok) << info.reason;
-  EXPECT_TRUE(info.value.is_string() &&
-              info.value.as_string().find("browserPid") != std::string::npos);
+  // TEST-CHANGE (AU-WIRE-KIND): structured, not JSON-in-a-string (see above).
+  ASSERT_TRUE(info.value.is_object());
+  EXPECT_NE(info.value.object_get("browserPid"), nullptr);
 }
 
 // (3) The plan RED: the wire subscribe is an ask and passes the SAME gate

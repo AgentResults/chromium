@@ -189,9 +189,13 @@ IN_PROC_BROWSER_TEST_F(AurelianPendingDispatchBrowserTest,
   // And A settles CORRECTLY (the real getVersion reply, ok).
   Dispatcher::AnswerOutcome a = hub.answer_outcome(slot_a);
   EXPECT_TRUE(a.ok) << a.reason;
-  ASSERT_TRUE(a.value.is_string());
-  EXPECT_NE(a.value.as_string().find("product"), std::string::npos)
-      << "A must settle with the real CDP reply, got: " << a.value.as_string();
+  // TEST-CHANGE (AU-WIRE-KIND): a CDP reply is a STRUCTURED answer now, not
+  // JSON-in-a-string. is_string() compiles against an object, so the build could
+  // not flag this.
+  ASSERT_TRUE(a.value.is_object())
+      << "A must settle with the real CDP reply, structured";
+  EXPECT_NE(a.value.object_get("product"), nullptr)
+      << "A must settle with the real getVersion reply (product)";
 
   // B was the canonical pong.
   Dispatcher::AnswerOutcome b = hub.answer_outcome(slot_b);

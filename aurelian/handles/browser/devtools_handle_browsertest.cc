@@ -19,6 +19,7 @@
 #include "aurelian/handles/root/root_handle.h"
 #include "aurelian/handles/root/wire_serialize.h"
 #include "aurelian/mirror/cdp_mirror.h"
+#include "aurelian/mirror/cdp_session.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -131,15 +132,24 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CapturesCdpEvent) {
   std::string id = ActivePageTargetId();
 
   auto sink = std::make_shared<RecordingSink>();
+  // TEST-CHANGE: this asked the event node for a "subscribe" verb. NO mirror
+  // handle offers one — the ask answered broken("unknown-message"), so the test
+  // drove a surface that does not exist (the same shape as the retired
+  // __handshake test). The ONE subscription seam is CdpSessionRegistry, which is
+  // exactly what the production wire-subscribe path uses
+  // (browser_main_extra.cc :: InstalledWireSubscribe). Drive that.
   std::shared_ptr<velite::agentspaces::Handle> event_node =
       CreateCdpMirrorForTarget(id, "page")
           ->ask("Runtime", velite::agentspaces::Value())
           ->ask("consoleAPICalled", velite::agentspaces::Value());
   ASSERT_NE(event_node->state_kind(), velite::agentspaces::StateKind::Broken)
       << event_node->broken_reason();
-  std::shared_ptr<velite::agentspaces::Handle> sub = event_node->ask(
-      "subscribe", velite::agentspaces::Value::make_object(
-                       {{"sink", velite::agentspaces::Value(sink)}}));
+  std::shared_ptr<velite::agentspaces::Handle> sub =
+      CdpSessionRegistry::Get().SubscribeOnTarget(
+          id, "Runtime.consoleAPICalled", sink,
+          "legion://chrome/targets/" + id +
+              "/cdp/Runtime/events/consoleAPICalled");
+  ASSERT_TRUE(sub) << "the registry must mint a subscription";
   ASSERT_NE(sub->state_kind(), velite::agentspaces::StateKind::Broken)
       << sub->broken_reason();
 
