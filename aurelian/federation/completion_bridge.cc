@@ -44,7 +44,7 @@ std::shared_ptr<CompletionRecord> CompletionBridge::CreateRecord() {
 
 void CompletionBridge::Complete(
     const std::shared_ptr<CompletionRecord>& record,
-    std::string reply) {
+    WireReply reply) {
   // Slot FIRST, then the CAS publishes it (release; the waiter's acquire
   // load pairs with it). A lost CAS (Stop() won) discards the reply — the
   // waiter was already signalled once, never twice.
@@ -83,7 +83,7 @@ void CompletionBridge::NotifySettled(const std::shared_ptr<Handle>& answer) {
   Complete(record, SerializeWireReply(answer));
 }
 
-std::string CompletionBridge::Wait(
+WireReply CompletionBridge::Wait(
     const std::shared_ptr<CompletionRecord>& record,
     base::TimeDelta timeout) {
   record->event.TimedWait(timeout);
@@ -93,13 +93,13 @@ std::string CompletionBridge::Wait(
     case CompletionRecord::kCompleted:
       return record->reply;
     case CompletionRecord::kShutdown:
-      return kDispatchShutdownReply;
+      return WireReply::MakeBroken(kDispatchShutdownReason);
     default:
       // TimedWait expiry: typed timeout, and the reference is simply
       // ABANDONED — no unregister round-trip, no wait on the UI thread. A
       // late completion writes the still-alive heap slot, signals an event
       // nobody waits on, and erases — harmless by shared ownership.
-      return kDispatchTimeoutReply;
+      return WireReply::MakeBroken(kDispatchTimeoutReason);
   }
 }
 

@@ -10,13 +10,17 @@
 //                                  pump_pending_answers settles on
 //                                  transition — promise pipelining drains
 //                                  for free, dispatcher.hpp §5.1)
-//   kCompleted → ResolvedValue    (the reply published by the record's
-//                                  release/acquire discipline — the same
-//                                  wire shape the blocking path returned)
-//   kShutdown  → Broken(kDispatchShutdownReply)
-//   deadline   → Broken(kDispatchTimeoutReply)   (checked in state_kind();
+//   kCompleted → ResolvedValue    (WireReply::kValue — the canonical JSON
+//                                  parsed back to the TYPED Value)
+//              → Broken           (WireReply::kBroken — a refusal settles as
+//                                  a refusal, carrying its reason)
+//   kShutdown  → Broken(kDispatchShutdownReason)
+//   deadline   → Broken(kDispatchTimeoutReason)  (checked in state_kind();
 //                                  no timer thread — round-6: every record
 //                                  is Stop()-flippable, nothing waits)
+//
+// The completed case reads the reply's KIND; it never sniffs the payload.
+// A legitimate answer whose text begins "broken:" is an answer.
 //
 // Velite-typed INTERNAL header (the nav_handle_internal.h discipline).
 
@@ -57,10 +61,14 @@ class PendingDispatchHandle : public velite::agentspaces::Handle {
 
   const std::shared_ptr<CompletionRecord> record_;
   const base::TimeTicks deadline_;
-  // Lazy caches, materialized on first observation (serve thread —
-  // state_kind/resolved_value are pump-called there only).
+  // Renders the completed record's WireReply into value_ or broken_ —
+  // once, on first observation (serve thread; state_kind/resolved_value are
+  // pump-called there only).
+  void Materialize() const;
+
   mutable velite::agentspaces::Value value_;
-  mutable bool value_cached_ = false;
+  mutable bool materialized_ = false;
+  mutable bool broken_ = false;
   mutable std::string broken_reason_;
 };
 

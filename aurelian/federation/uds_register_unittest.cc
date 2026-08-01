@@ -11,6 +11,7 @@
 #include "aurelian/federation/uds_register.h"
 
 #include "aurelian/federation/completion_bridge.h"
+#include "aurelian/handles/root/wire_serialize.h"
 
 #include <unistd.h>
 
@@ -83,7 +84,11 @@ std::string TempSock() {
 // assertions everywhere; only the fake's constructor shape moved.
 std::shared_ptr<CompletionRecord> FakeCompleted(std::string reply) {
   auto record = std::make_shared<CompletionRecord>();
-  record->reply = std::move(reply);
+  // TEST-CHANGE (AU-WIRE-KIND): the fake answers a VALUE, rendered
+  // through the one canonical path so it is canonical JSON like
+  // every real value reply.
+  record->reply = SerializeWireValue(
+      velite::agentspaces::Value(std::move(reply)));
   record->outcome.store(CompletionRecord::kCompleted);
   record->event.Signal();
   return record;

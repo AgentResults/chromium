@@ -41,16 +41,19 @@ bool Contains(const std::string& haystack, const std::string& needle) {
 
 // ACM-R(5): a granted facade verb settles through the HS-1 session layer;
 // the membrane probes below stay synchronous (refusals never dispatch).
+// The canonical-JSON payload of the settled reply. The refusal probes below
+// assert on RootDispatch(...).reply.is_broken() instead, so a refusal can
+// never reach a Contains() check and pass for a value.
 std::string DispatchAndWait(ChromeRoot* root, const std::string& path) {
   DispatchOutcome outcome = RootDispatch(root, path);
   if (outcome.kind == DispatchOutcome::Kind::kCompleted) {
-    return outcome.reply;
+    return outcome.reply.payload;
   }
   EXPECT_TRUE(base::test::RunUntil([&]() {
     return outcome.answer->state_kind() !=
            velite::agentspaces::StateKind::Pending;
   })) << "pending facade answer never settled";
-  return SerializeWireReply(outcome.answer);
+  return SerializeWireReply(outcome.answer).payload;
 }
 }  // namespace
 
@@ -71,21 +74,27 @@ IN_PROC_BROWSER_TEST_F(AurelianInstallMembraneBrowserTest, SealsAmbientSurface) 
 
   // (a) Capabilities outside the policy are unreachable — broken('out-of-scope'),
   //     not a live tab strip / GPU surface.
-  EXPECT_TRUE(Contains(RootDispatch(root, "tabs/count").reply, "out-of-scope"))
+  EXPECT_TRUE(RootDispatch(root, "tabs/count").reply.is_broken())
       << RootDispatch(root, "tabs/count").reply;
-  EXPECT_TRUE(Contains(RootDispatch(root, "gpu/info").reply, "out-of-scope"))
+  EXPECT_EQ(RootDispatch(root, "tabs/count").reply.payload, "out-of-scope");
+  EXPECT_TRUE(RootDispatch(root, "gpu/info").reply.is_broken())
       << RootDispatch(root, "gpu/info").reply;
+  EXPECT_EQ(RootDispatch(root, "gpu/info").reply.payload, "out-of-scope");
   // A capability the membrane does not mount at all is likewise out of scope.
-  EXPECT_TRUE(Contains(RootDispatch(root, "net").reply, "out-of-scope"))
+  EXPECT_TRUE(RootDispatch(root, "net").reply.is_broken())
       << RootDispatch(root, "net").reply;
+  EXPECT_EQ(RootDispatch(root, "net").reply.payload, "out-of-scope");
 
   // (b) The wrapped Handle exposes no unwrap to its raw ambient reference.
-  EXPECT_TRUE(Contains(RootDispatch(root, "system/__ambient").reply, "unknown-message"))
+  EXPECT_TRUE(RootDispatch(root, "system/__ambient").reply.is_broken())
       << RootDispatch(root, "system/__ambient").reply;
+  EXPECT_EQ(RootDispatch(root, "system/__ambient").reply.payload,
+            "unknown-message");
 
   // (c) The root yields no ambient authority directly.
-  EXPECT_TRUE(Contains(RootDispatch(root, "__ambient").reply, "unknown-message"))
+  EXPECT_TRUE(RootDispatch(root, "__ambient").reply.is_broken())
       << RootDispatch(root, "__ambient").reply;
+  EXPECT_EQ(RootDispatch(root, "__ambient").reply.payload, "unknown-message");
 
   // [EMBODIMENT-ONE-SHOT-CONSUMPTION] — a second install on the SAME space is
   // refused (per-AgentSpace one-shot); the membrane is not re-opened.

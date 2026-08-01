@@ -73,7 +73,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
   ASSERT_EQ(outcome.answer->state_kind(), StateKind::ResolvedValue)
       << "broken: " << outcome.answer->broken_reason();
 
-  std::string reply = SerializeWireReply(outcome.answer);
+  std::string reply = SerializeWireReply(outcome.answer).payload;
   std::optional<base::DictValue> result = ParseDict(reply);
   ASSERT_TRUE(result.has_value()) << reply;
   const std::string* product = result->FindString("product");
@@ -115,8 +115,8 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
 
   // Correlation: each answer is the RIGHT one (the old "id":1 matcher
   // would hand one reply to both, or the wrong reply to either).
-  std::string version_reply = SerializeWireReply(version.answer);
-  std::string targets_reply = SerializeWireReply(targets.answer);
+  std::string version_reply = SerializeWireReply(version.answer).payload;
+  std::string targets_reply = SerializeWireReply(targets.answer).payload;
   EXPECT_NE(version_reply.find("product"), std::string::npos)
       << version_reply;
   EXPECT_EQ(version_reply.find("targetInfos"), std::string::npos)
@@ -144,7 +144,8 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest, UnknownCommandTyped) {
   DispatchOutcome outcome =
       RootDispatch(root, "cdp/Browser/noSuchCommand/invoke");
   EXPECT_EQ(outcome.kind, DispatchOutcome::Kind::kCompleted);
-  EXPECT_EQ(outcome.reply, "broken:unknown-command-or-event");
+  EXPECT_TRUE(outcome.reply.is_broken());
+  EXPECT_EQ(outcome.reply.payload, "unknown-command-or-event");
 
   DestroyChromeRoot(root);
 }
@@ -160,9 +161,10 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
 
   DispatchOutcome outcome = RootDispatch(root, "cdp/Page/navigate/invoke");
   ASSERT_EQ(outcome.kind, DispatchOutcome::Kind::kCompleted);
-  EXPECT_EQ(outcome.reply.rfind("broken:session-context", 0), 0u)
+  EXPECT_TRUE(outcome.reply.is_broken()) << outcome.reply;
+  EXPECT_EQ(outcome.reply.payload.rfind("session-context", 0), 0u)
       << outcome.reply;
-  EXPECT_NE(outcome.reply.find("targets/<id>/cdp/Page/navigate"),
+  EXPECT_NE(outcome.reply.payload.find("targets/<id>/cdp/Page/navigate"),
             std::string::npos)
       << outcome.reply;
 
@@ -192,7 +194,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
   ASSERT_EQ(outcome.answer->state_kind(), StateKind::ResolvedValue)
       << "the spec did not reach the host: "
       << outcome.answer->broken_reason();
-  std::string reply = SerializeWireReply(outcome.answer);
+  std::string reply = SerializeWireReply(outcome.answer).payload;
   EXPECT_NE(reply.find("featureEnabled"), std::string::npos) << reply;
 
   // A MALFORMED serialized spec is a typed refusal, never a silent
@@ -200,7 +202,8 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpSessionBrowserTest,
   DispatchOutcome bad = RootDispatch(
       root, "cdp/SystemInfo/getFeatureState/invoke", "{not json");
   EXPECT_EQ(bad.kind, DispatchOutcome::Kind::kCompleted);
-  EXPECT_EQ(bad.reply.rfind("broken:spec-parse-failure", 0), 0u) << bad.reply;
+  EXPECT_TRUE(bad.reply.is_broken()) << bad.reply;
+  EXPECT_EQ(bad.reply.payload, "spec-parse-failure") << bad.reply;
 
   DestroyChromeRoot(root);
 }

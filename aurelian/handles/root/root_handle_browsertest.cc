@@ -41,7 +41,7 @@ using velite::agentspaces::StateKind;
 // immediately (exactly the old path); Pending pumps the UI loop until the
 // HS-1 session layer settles it — the TEST owns the wait, the production
 // wire path waits on its completion record instead.
-std::string SettleToReply(DispatchOutcome outcome) {
+WireReply SettleToReply(DispatchOutcome outcome) {
   if (outcome.kind == DispatchOutcome::Kind::kCompleted) {
     return outcome.reply;
   }
@@ -51,8 +51,11 @@ std::string SettleToReply(DispatchOutcome outcome) {
   return SerializeWireReply(outcome.answer);
 }
 
+// The canonical-JSON payload of the settled reply. A refusal would surface
+// here as its reason text, so tests that probe for a REFUSAL assert on
+// SettleToReply(...).is_broken() rather than on this string.
 std::string DispatchAndWait(ChromeRoot* root, const std::string& path) {
-  return SettleToReply(RootDispatch(root, path));
+  return SettleToReply(RootDispatch(root, path)).payload;
 }
 
 }  // namespace
@@ -64,7 +67,8 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToRealCapability) {
   ASSERT_NE(root, nullptr);
 
   // The root answers its identity.
-  EXPECT_EQ(RootDispatch(root, "__getIdentity").reply, "legion://chrome/");
+  EXPECT_EQ(RootDispatch(root, "__getIdentity").reply.payload,
+            "\"legion://chrome/\"");
 
   // Walk root -> system -> info, reaching the REAL system capability: the
   // reported browser pid is this process, and at least one live renderer is
@@ -80,7 +84,7 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToRealCapability) {
   EXPECT_EQ(info.find("\"rendererCount\":0"), std::string::npos) << info;
 
   // An unknown child is broken.
-  EXPECT_NE(RootDispatch(root, "bogus").reply.find("broken"), std::string::npos);
+  EXPECT_TRUE(RootDispatch(root, "bogus").reply.is_broken());
 
   DestroyChromeRoot(root);
 }
@@ -98,7 +102,7 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, FacadeVerbsRideTheMirrorSession)
       << "system/info did not go through the mirror session — a bespoke "
          "synchronous read survives: "
       << info.reply;
-  std::string reply = SettleToReply(std::move(info));
+  std::string reply = SettleToReply(std::move(info)).payload;
   EXPECT_NE(reply.find("\"browserPid\":"), std::string::npos) << reply;
   EXPECT_EQ(CdpSessionRegistry::Get().SessionCountForTesting(), 1u)
       << "the facade invoke must lazily attach the ONE registry browser "
@@ -155,18 +159,22 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, NavigatesToMediaSurface) {
   ASSERT_NE(root, nullptr);
 
   // The media surface answers its identity through the sealed root.
-  EXPECT_EQ(RootDispatch(root, "media/__getIdentity").reply, "legion://chrome/media");
+  EXPECT_EQ(RootDispatch(root, "media/__getIdentity").reply.payload,
+            "\"legion://chrome/media\"");
 
   // Walk root -> media -> {camera,mic,peer-audio} -> describe: each advertises
   // its endowment contract (the bindable surface for Cicero §26).
-  EXPECT_NE(RootDispatch(root, "media/camera/describe").reply.find("video_sink"),
+  EXPECT_NE(RootDispatch(root, "media/camera/describe").reply.payload.find(
+                "video_sink"),
             std::string::npos)
       << RootDispatch(root, "media/camera/describe").reply;
-  EXPECT_NE(RootDispatch(root, "media/mic/describe").reply.find("audio_sink"),
+  EXPECT_NE(RootDispatch(root, "media/mic/describe").reply.payload.find(
+                "audio_sink"),
             std::string::npos)
       << RootDispatch(root, "media/mic/describe").reply;
   EXPECT_NE(
-      RootDispatch(root, "media/peer-audio/describe").reply.find("audio_source"),
+      RootDispatch(root, "media/peer-audio/describe").reply.payload.find(
+          "audio_source"),
       std::string::npos)
       << RootDispatch(root, "media/peer-audio/describe").reply;
 
@@ -180,9 +188,8 @@ IN_PROC_BROWSER_TEST_F(AurelianRootBrowserTest, MediaSurfaceSealedOff) {
       CreateChromeRootWithPolicy(EmbodimentPolicy::WithCapabilities({"system"}));
   ASSERT_NE(root, nullptr);
 
-  EXPECT_NE(RootDispatch(root, "media").reply.find("broken"), std::string::npos);
-  EXPECT_NE(RootDispatch(root, "media/camera/describe").reply.find("broken"),
-            std::string::npos);
+  EXPECT_TRUE(RootDispatch(root, "media").reply.is_broken());
+  EXPECT_TRUE(RootDispatch(root, "media/camera/describe").reply.is_broken());
 
   DestroyChromeRoot(root);
 }

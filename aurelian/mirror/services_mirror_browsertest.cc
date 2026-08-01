@@ -75,10 +75,10 @@ IN_PROC_BROWSER_TEST_F(AurelianServicesMirrorBrowserTest,
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "services/__getIdentity").reply,
-            "legion://chrome/services");
+  EXPECT_EQ(RootDispatch(root, "services/__getIdentity").reply.payload,
+            "\"legion://chrome/services\"");
 
-  std::string reply = RootDispatch(root, "services/__getChildren").reply;
+  std::string reply = RootDispatch(root, "services/__getChildren").reply.payload;
   std::optional<base::ListValue> children = ParseList(reply);
   ASSERT_TRUE(children.has_value()) << "not a JSON list: " << reply;
 
@@ -109,24 +109,24 @@ IN_PROC_BROWSER_TEST_F(AurelianServicesMirrorBrowserTest,
   ASSERT_FALSE(direct.empty());
   const std::string name = *direct.begin();
 
-  EXPECT_EQ(RootDispatch(root, "services/" + name + "/__getType").reply,
-            "legion://types/ChromeService");
+  EXPECT_EQ(RootDispatch(root, "services/" + name + "/__getType").reply.payload,
+            "\"legion://types/ChromeService\"");
 
   std::string schema_reply =
-      RootDispatch(root, "services/" + name + "/__getSchema").reply;
+      RootDispatch(root, "services/" + name + "/__getSchema").reply.payload;
   std::optional<base::DictValue> schema = ParseDict(schema_reply);
   ASSERT_TRUE(schema.has_value()) << schema_reply;
   EXPECT_EQ(*schema->FindString("name"), name) << schema_reply;
   EXPECT_EQ(schema->FindBool("catalogOnly").value_or(false), true)
       << schema_reply;
 
-  std::string invoke_reply =
+  WireReply invoke_reply =
       RootDispatch(root, "services/" + name + "/invoke").reply;
-  EXPECT_EQ(invoke_reply.rfind("broken:no-invoke-surface", 0), 0u)
-      << invoke_reply;
+  EXPECT_TRUE(invoke_reply.is_broken()) << invoke_reply;
+  EXPECT_EQ(invoke_reply.payload, "no-invoke-surface") << invoke_reply;
 
-  EXPECT_EQ(RootDispatch(root, "services/NoSuchService/__getType").reply,
-            "broken:unknown-service");
+  EXPECT_TRUE(RootDispatch(root, "services/NoSuchService/__getType").reply.is_broken());
+  EXPECT_EQ(RootDispatch(root, "services/NoSuchService/__getType").reply.payload, "unknown-service");
 
   DestroyChromeRoot(root);
 }
@@ -138,13 +138,12 @@ IN_PROC_BROWSER_TEST_F(AurelianServicesMirrorBrowserTest,
   ChromeRoot* sealed_off = CreateChromeRootWithPolicy(
       EmbodimentPolicy::WithCapabilities({"system"}));
   ASSERT_NE(sealed_off, nullptr);
-  EXPECT_NE(RootDispatch(sealed_off, "services").reply.find("broken"),
-            std::string::npos);
+  EXPECT_TRUE(RootDispatch(sealed_off, "services").reply.is_broken());
   DestroyChromeRoot(sealed_off);
 
   ChromeRoot* full = CreateChromeRoot();
   ASSERT_NE(full, nullptr);
-  std::string reply = RootDispatch(full, "services/__getChildren").reply;
+  std::string reply = RootDispatch(full, "services/__getChildren").reply.payload;
   EXPECT_TRUE(ParseList(reply).has_value())
       << "FullStandalone does not mount services: " << reply;
   DestroyChromeRoot(full);

@@ -21,7 +21,7 @@ struct BrowserMainExtraImpl;
 // same function; nothing else may mint a root from ambient authority. It
 // is record-creating and NON-BLOCKING (design §6.1): the returned
 // CompletionRecord settles via the HS-1 session layer; before the one-shot
-// install (or after teardown) it completes "broken:no-root" — fail-closed,
+// install (or after teardown) it completes broken("no-root") — fail-closed,
 // never a second root. The synchronous InstalledChromeDispatch retired
 // with the blocking bridge (design §6.2, DELETE-default — no production
 // consumer remained).

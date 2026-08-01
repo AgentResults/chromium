@@ -43,7 +43,8 @@ IN_PROC_BROWSER_TEST_F(AurelianOneRootBrowserTest, OneRootOneBridgeSite) {
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return record->outcome.load() != CompletionRecord::kPending;
   }));
-  EXPECT_EQ(record->reply, "legion://chrome/")
+  EXPECT_FALSE(record->reply.is_broken()) << record->reply;
+  EXPECT_EQ(record->reply.payload, "\"legion://chrome/\"")
       << "the exported dispatch must resolve against the installed root";
 
   // The counted-construction audit: dispatching through the exported fn

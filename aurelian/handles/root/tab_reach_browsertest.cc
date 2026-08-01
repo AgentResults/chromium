@@ -33,7 +33,7 @@ namespace {
 
 using velite::agentspaces::StateKind;
 
-std::string SettleToReply(DispatchOutcome outcome) {
+WireReply SettleToReply(DispatchOutcome outcome) {
   if (outcome.kind == DispatchOutcome::Kind::kCompleted) {
     return outcome.reply;
   }
@@ -43,8 +43,11 @@ std::string SettleToReply(DispatchOutcome outcome) {
   return SerializeWireReply(outcome.answer);
 }
 
+// The canonical-JSON payload of the settled reply. A refusal would surface
+// here as its reason text, so tests that probe for a REFUSAL assert on
+// SettleToReply(...).is_broken() rather than on this string.
 std::string DispatchAndWait(ChromeRoot* root, const std::string& path) {
-  return SettleToReply(RootDispatch(root, path));
+  return SettleToReply(RootDispatch(root, path)).payload;
 }
 
 }  // namespace
@@ -60,7 +63,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTabReachBrowserTest, ControllerDrivesLiveTabStrip
   // Closing the browser's last remaining tab is refused (a window close is
   // out of scope) — the per-browser last-tab guard survives as pre-dispatch
   // glue (absorbed from the deleted tabstrip_handle_browsertest).
-  EXPECT_EQ(DispatchAndWait(root, "tabs/0/close"), "refused");
+  EXPECT_EQ(DispatchAndWait(root, "tabs/0/close"), "\"refused\"");
   EXPECT_EQ(DispatchAndWait(root, "tabs/count"), "1");
 
   // Open a second tab THROUGH the mounted interactive verb. The open
@@ -72,24 +75,24 @@ IN_PROC_BROWSER_TEST_F(AurelianTabReachBrowserTest, ControllerDrivesLiveTabStrip
   EXPECT_EQ(DispatchAndWait(root, "tabs/activeIndex"), "1");
 
   // `activate` genuinely moves the active tab on the LIVE strip — both ways.
-  EXPECT_EQ(DispatchAndWait(root, "tabs/0/activate"), "ok");
+  EXPECT_EQ(DispatchAndWait(root, "tabs/0/activate"), "\"ok\"");
   EXPECT_EQ(DispatchAndWait(root, "tabs/activeIndex"), "0");
-  EXPECT_EQ(DispatchAndWait(root, "tabs/1/activate"), "ok");
+  EXPECT_EQ(DispatchAndWait(root, "tabs/1/activate"), "\"ok\"");
   EXPECT_EQ(DispatchAndWait(root, "tabs/activeIndex"), "1");
 
   // A bad index is refused without dispatching anything (index->target
   // resolution is the recorded selection glue).
-  EXPECT_EQ(DispatchAndWait(root, "tabs/5/activate"), "bad-index");
+  EXPECT_EQ(DispatchAndWait(root, "tabs/5/activate"), "\"bad-index\"");
 
   // The per-tab handle reads real committed state: navigate the active tab
   // (tab 1) to a data: URL and read it back through `tabs/1/url`.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL("data:text/html,<title>reach</title>tab-reach")));
   EXPECT_EQ(DispatchAndWait(root, "tabs/1/url"),
-            "data:text/html,<title>reach</title>tab-reach");
+            "\"data:text/html,<title>reach</title>tab-reach\"");
 
   // `close` shrinks the live strip.
-  EXPECT_EQ(DispatchAndWait(root, "tabs/1/close"), "ok");
+  EXPECT_EQ(DispatchAndWait(root, "tabs/1/close"), "\"ok\"");
   EXPECT_EQ(DispatchAndWait(root, "tabs/count"), "1");
 
   DestroyChromeRoot(root);

@@ -45,6 +45,7 @@
 #include <set>
 #include <string>
 
+#include "aurelian/handles/root/wire_reply.h"
 #include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
@@ -57,17 +58,20 @@ class Handle;
 
 namespace aurelian {
 
-// The typed wire replies of the two non-completion outcomes.
-inline constexpr char kDispatchTimeoutReply[] = "broken:dispatch-timeout";
-inline constexpr char kDispatchShutdownReply[] = "broken:dispatch-shutdown";
+// The typed refusal REASONS of the two non-completion outcomes. Reasons,
+// not replies: WireReply::kind already says these are refusals, so the
+// old "broken:" prefix was the kind stuttered into the text.
+inline constexpr char kDispatchTimeoutReason[] = "dispatch-timeout";
+inline constexpr char kDispatchShutdownReason[] = "dispatch-shutdown";
 
 // The heap-owned, shared-ownership completion record (design section 3).
 struct CompletionRecord {
   enum Outcome : int { kPending = 0, kCompleted = 1, kShutdown = 2 };
 
   // The slot — written by exactly one completion path, published by the
-  // winning CAS to kCompleted.
-  std::string reply;
+  // winning CAS to kCompleted. Carries its KIND, so a refusal settles the
+  // dispatch handle Broken instead of passing for a string answer.
+  WireReply reply;
   base::WaitableEvent event;
   std::atomic<int> outcome{kPending};
 };
@@ -93,7 +97,7 @@ class CompletionBridge {
   // slot, CAS to completed, signal, remove from the live set. A lost CAS
   // (Stop() won mid-flight) discards the reply and does not signal twice.
   void Complete(const std::shared_ptr<CompletionRecord>& record,
-                std::string reply);
+                WireReply reply);
 
   // UI THREAD, Pending outcome: hand the record to the UI-confined
   // settlement registrar keyed by the pending answer handle; the posted
@@ -111,8 +115,8 @@ class CompletionBridge {
   // SERVE THREAD: the one wait. Returns the published reply, the typed
   // timeout (abandoning the reference — no unregister round-trip), or the
   // typed shutdown error.
-  std::string Wait(const std::shared_ptr<CompletionRecord>& record,
-                   base::TimeDelta timeout);
+  WireReply Wait(const std::shared_ptr<CompletionRecord>& record,
+                 base::TimeDelta timeout);
 
   // SHUTDOWN THREAD, before the serve threads are joined: mark every live
   // record shutdown + signal. The mutex guards only the live set.

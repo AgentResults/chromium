@@ -81,6 +81,7 @@ if (enable_aurelian) {
   # handle AND a fast unittest can share it. RTTI (touches Velite Value/Handle).
   source_set("aurelian_wire_serialize") {
     sources = [
+      "handles/root/wire_reply.h",
       "handles/root/wire_serialize.cc",
       "handles/root/wire_serialize.h",
     ]

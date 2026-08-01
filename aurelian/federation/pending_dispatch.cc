@@ -7,7 +7,9 @@
 #include <utility>
 
 #include "aurelian/federation/completion_bridge.h"
+#include "velite/agentspaces-wire/json_marshal.hpp"
 #include "velite/agentspaces-wire/value_handle.hpp"
+#include "velite/json/value.h"
 
 namespace aurelian {
 
@@ -26,29 +28,51 @@ PendingDispatchHandle::PendingDispatchHandle(
     std::shared_ptr<CompletionRecord> record, base::TimeTicks deadline)
     : record_(std::move(record)), deadline_(deadline) {}
 
+void PendingDispatchHandle::Materialize() const {
+  if (materialized_) {
+    return;
+  }
+  materialized_ = true;
+  const WireReply& reply = record_->reply;
+  if (reply.is_broken()) {
+    broken_ = true;
+    broken_reason_ = reply.payload;
+    return;
+  }
+  velite::json::JsonValue parsed;
+  if (!velite::json::JsonValue::parse(reply.payload, parsed)) {
+    // A value reply that is not canonical JSON is a WIRE DEFECT. Surface it
+    // as a refusal — never as a plausible-looking string answer, which is
+    // exactly the confusion the reply kind exists to end.
+    broken_ = true;
+    broken_reason_ = "wire-reply-unparseable";
+    return;
+  }
+  value_ = velite::agentspaces::from_json(parsed);
+}
+
 StateKind PendingDispatchHandle::state_kind() const {
   // acquire pairs with the completion path's slot-then-CAS publish.
   const int outcome = record_->outcome.load(std::memory_order_acquire);
   if (outcome == CompletionRecord::kCompleted) {
-    return StateKind::ResolvedValue;
+    Materialize();
+    return broken_ ? StateKind::Broken : StateKind::ResolvedValue;
   }
   if (outcome == CompletionRecord::kShutdown) {
-    broken_reason_ = kDispatchShutdownReply;
+    broken_reason_ = kDispatchShutdownReason;
     return StateKind::Broken;
   }
   if (!deadline_.is_null() && base::TimeTicks::Now() >= deadline_) {
-    broken_reason_ = kDispatchTimeoutReply;
+    broken_reason_ = kDispatchTimeoutReason;
     return StateKind::Broken;
   }
   return StateKind::Pending;
 }
 
 const Value& PendingDispatchHandle::resolved_value() const {
-  if (!value_cached_ &&
-      record_->outcome.load(std::memory_order_acquire) ==
-          CompletionRecord::kCompleted) {
-    value_ = Value(record_->reply);
-    value_cached_ = true;
+  if (record_->outcome.load(std::memory_order_acquire) ==
+      CompletionRecord::kCompleted) {
+    Materialize();
   }
   return value_;
 }

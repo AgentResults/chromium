@@ -66,10 +66,10 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "prefs/__getIdentity").reply,
-            "legion://chrome/prefs");
+  EXPECT_EQ(RootDispatch(root, "prefs/__getIdentity").reply.payload,
+            "\"legion://chrome/prefs\"");
 
-  std::string reply = RootDispatch(root, "prefs/__getChildren").reply;
+  std::string reply = RootDispatch(root, "prefs/__getChildren").reply.payload;
   std::optional<base::ListValue> children = ParseList(reply);
   ASSERT_TRUE(children.has_value()) << "not a JSON list: " << reply;
   EXPECT_GE(children->size(), 300u) << "registry suspiciously small";
@@ -96,12 +96,12 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
 
   EXPECT_EQ(
       RootDispatch(root, std::string("prefs/") + kInertPref + "/__getType")
-          .reply,
-      "legion://types/ChromePreference");
+          .reply.payload,
+      "\"legion://types/ChromePreference\"");
 
   std::string reply =
       RootDispatch(root, std::string("prefs/") + kInertPref + "/__getSchema")
-          .reply;
+          .reply.payload;
   std::optional<base::DictValue> schema = ParseDict(reply);
   ASSERT_TRUE(schema.has_value()) << reply;
   EXPECT_EQ(*schema->FindString("name"), kInertPref) << reply;
@@ -112,8 +112,8 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
   EXPECT_TRUE(schema->FindBool("default").has_value()) << reply;
 
   // Unknown names are typed, never silence.
-  EXPECT_EQ(RootDispatch(root, "prefs/no.such.pref/__getSchema").reply,
-            "broken:unknown-pref");
+  EXPECT_TRUE(RootDispatch(root, "prefs/no.such.pref/__getSchema").reply.is_broken());
+  EXPECT_EQ(RootDispatch(root, "prefs/no.such.pref/__getSchema").reply.payload, "unknown-pref");
 
   DestroyChromeRoot(root);
 }
@@ -128,23 +128,23 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
   const std::string set_path = std::string("prefs/") + kInertPref + "/set";
 
   const bool original = LivePrefs()->GetBoolean(prefs::kShowHomeButton);
-  EXPECT_EQ(RootDispatch(root, get_path).reply, original ? "true" : "false");
+  EXPECT_EQ(RootDispatch(root, get_path).reply.payload, original ? "true" : "false");
 
   // Flip through the mirror; the LIVE profile observes it.
   const bool flipped = !original;
   std::string set_reply = RootDispatch(
       root, set_path, std::string("{\"value\":") + (flipped ? "true" : "false") + "}")
-      .reply;
+      .reply.payload;
   EXPECT_EQ(set_reply, flipped ? "true" : "false") << set_reply;
   EXPECT_EQ(LivePrefs()->GetBoolean(prefs::kShowHomeButton), flipped)
       << "the live profile did not observe the mirror's write";
-  EXPECT_EQ(RootDispatch(root, get_path).reply, flipped ? "true" : "false");
+  EXPECT_EQ(RootDispatch(root, get_path).reply.payload, flipped ? "true" : "false");
 
   // Restore.
   RootDispatch(root, set_path,
                std::string("{\"value\":") + (original ? "true" : "false") + "}");
   EXPECT_EQ(LivePrefs()->GetBoolean(prefs::kShowHomeButton), original);
-  EXPECT_EQ(RootDispatch(root, get_path).reply, original ? "true" : "false");
+  EXPECT_EQ(RootDispatch(root, get_path).reply.payload, original ? "true" : "false");
 
   DestroyChromeRoot(root);
 }
@@ -161,15 +161,18 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
   std::string reply =
       RootDispatch(root, std::string("prefs/") + kInertPref + "/set",
                    "{\"value\":\"not-a-bool\"}")
-          .reply;
+          .reply.payload;
   EXPECT_EQ(reply.rfind("broken:pref-type-mismatch", 0), 0u) << reply;
   EXPECT_EQ(LivePrefs()->GetBoolean(prefs::kShowHomeButton), original);
 
   // A set with no value field is typed too.
+  EXPECT_TRUE(RootDispatch(root, std::string("prefs/") + kInertPref + "/set",
+                           "{}")
+                  .reply.is_broken());
   EXPECT_EQ(RootDispatch(root, std::string("prefs/") + kInertPref + "/set",
                          "{}")
-                .reply,
-            "broken:set-needs-value");
+                .reply.payload,
+            "set-needs-value");
 
   DestroyChromeRoot(root);
 }
@@ -181,13 +184,12 @@ IN_PROC_BROWSER_TEST_F(AurelianPrefsMirrorBrowserTest,
   ChromeRoot* sealed_off = CreateChromeRootWithPolicy(
       EmbodimentPolicy::WithCapabilities({"system"}));
   ASSERT_NE(sealed_off, nullptr);
-  EXPECT_NE(RootDispatch(sealed_off, "prefs").reply.find("broken"),
-            std::string::npos);
+  EXPECT_TRUE(RootDispatch(sealed_off, "prefs").reply.is_broken());
   DestroyChromeRoot(sealed_off);
 
   ChromeRoot* full = CreateChromeRoot();
   ASSERT_NE(full, nullptr);
-  std::string reply = RootDispatch(full, "prefs/__getChildren").reply;
+  std::string reply = RootDispatch(full, "prefs/__getChildren").reply.payload;
   EXPECT_TRUE(ParseList(reply).has_value())
       << "FullStandalone does not mount prefs: " << reply;
   DestroyChromeRoot(full);

@@ -14,6 +14,8 @@
 #include <memory>
 #include <string>
 
+#include "aurelian/handles/root/wire_reply.h"
+
 namespace velite::agentspaces {
 class Handle;
 }
@@ -46,8 +48,8 @@ void DestroyChromeRoot(ChromeRoot* root);
 struct DispatchOutcome {
   enum class Kind { kCompleted, kPending };
   Kind kind = Kind::kCompleted;
-  // kCompleted: the serialized wire reply.
-  std::string reply;
+  // kCompleted: the wire reply, carrying its kind.
+  WireReply reply;
   // kPending: the final hop's still-Pending answer handle.
   std::shared_ptr<velite::agentspaces::Handle> answer;
 };

@@ -115,10 +115,10 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "targets/__getIdentity").reply,
-            "legion://chrome/targets");
+  EXPECT_EQ(RootDispatch(root, "targets/__getIdentity").reply.payload,
+            "\"legion://chrome/targets\"");
 
-  std::string before_reply = RootDispatch(root, "targets/__getChildren").reply;
+  std::string before_reply = RootDispatch(root, "targets/__getChildren").reply.payload;
   std::optional<base::ListValue> before = ParseList(before_reply);
   ASSERT_TRUE(before.has_value()) << "not a JSON list: " << before_reply;
   for (const base::Value& c : *before) {
@@ -136,7 +136,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
                    /*foreground=*/true);
   ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
 
-  std::string after_reply = RootDispatch(root, "targets/__getChildren").reply;
+  std::string after_reply = RootDispatch(root, "targets/__getChildren").reply.payload;
   std::optional<base::ListValue> after = ParseList(after_reply);
   ASSERT_TRUE(after.has_value()) << "not a JSON list: " << after_reply;
   std::set<std::string> after_set = AsStringSet(*after);
@@ -156,10 +156,10 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
       continue;
     }
     std::string id = uri.substr(std::string(kTargetsPrefix).size());
-    EXPECT_EQ(RootDispatch(root, "targets/" + id + "/__getType").reply,
-              "legion://types/ChromeTarget");
+    EXPECT_EQ(RootDispatch(root, "targets/" + id + "/__getType").reply.payload,
+              "\"legion://types/ChromeTarget\"");
     std::string schema_reply =
-        RootDispatch(root, "targets/" + id + "/__getSchema").reply;
+        RootDispatch(root, "targets/" + id + "/__getSchema").reply.payload;
     std::optional<base::DictValue> schema = ParseDict(schema_reply);
     ASSERT_TRUE(schema.has_value()) << schema_reply;
     const std::string* type = schema->FindString("type");
@@ -198,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   ASSERT_TRUE(WaitUntilSettled(outcome.answer));
   ASSERT_EQ(outcome.answer->state_kind(), StateKind::ResolvedValue)
       << outcome.answer->broken_reason();
-  std::string reply = SerializeWireReply(outcome.answer);
+  std::string reply = SerializeWireReply(outcome.answer).payload;
   std::optional<base::DictValue> result = ParseDict(reply);
   ASSERT_TRUE(result.has_value()) << reply;
   EXPECT_EQ(result->FindIntByDottedPath("result.value").value_or(0), 42)
@@ -212,7 +212,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   ASSERT_TRUE(WaitUntilSettled(loc.answer));
   ASSERT_EQ(loc.answer->state_kind(), StateKind::ResolvedValue)
       << loc.answer->broken_reason();
-  EXPECT_NE(SerializeWireReply(loc.answer).find("acm3-evaluate-tab"),
+  EXPECT_NE(SerializeWireReply(loc.answer).payload.find("acm3-evaluate-tab"),
             std::string::npos)
       << SerializeWireReply(loc.answer);
 
@@ -233,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
 
   // Second tab via the facade (foreground -> active), then give it a
   // distinct starting page.
-  EXPECT_NE(RootDispatch(root, "tabs/open").reply, "-1");
+  EXPECT_NE(RootDispatch(root, "tabs/open").reply.payload, "-1");
   ASSERT_TRUE(base::test::RunUntil([&]() { return GetWC() != first_wc; }));
   content::WebContents* second_wc = GetWC();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -293,11 +293,12 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
         root, "targets/" + id + "/cdp/" + domain + "/" + *cmd + "/invoke");
     ASSERT_EQ(outcome.kind, DispatchOutcome::Kind::kCompleted)
         << domain << "." << *cmd << " dispatched — the gate is absent";
-    EXPECT_EQ(outcome.reply.rfind("broken:session-context", 0), 0u)
+    EXPECT_TRUE(outcome.reply.is_broken());
+    EXPECT_EQ(outcome.reply.payload.rfind("session-context", 0), 0u)
         << domain << "." << *cmd << ": " << outcome.reply;
     // The refusal NAMES the browser path (typed redirect, never protocol
     // archaeology — design section 2).
-    EXPECT_NE(outcome.reply.find("cdp/" + domain + "/" + *cmd),
+    EXPECT_NE(outcome.reply.payload.find("cdp/" + domain + "/" + *cmd),
               std::string::npos)
         << outcome.reply;
   }
@@ -328,9 +329,10 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
       root, "targets/" + id + "/cdp/SystemInfo/getInfo/invoke");
   ASSERT_EQ(refused.kind, DispatchOutcome::Kind::kCompleted)
       << "getInfo dispatched — the command-level gate is absent";
-  EXPECT_EQ(refused.reply.rfind("broken:session-context", 0), 0u)
+  EXPECT_TRUE(refused.reply.is_broken());
+  EXPECT_EQ(refused.reply.payload.rfind("session-context", 0), 0u)
       << refused.reply;
-  EXPECT_NE(refused.reply.find("cdp/SystemInfo/getInfo"), std::string::npos)
+  EXPECT_NE(refused.reply.payload.find("cdp/SystemInfo/getInfo"), std::string::npos)
       << refused.reply;
 
   DispatchOutcome dispatched = RootDispatch(
@@ -341,7 +343,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   ASSERT_TRUE(WaitUntilSettled(dispatched.answer));
   ASSERT_EQ(dispatched.answer->state_kind(), StateKind::ResolvedValue)
       << dispatched.answer->broken_reason();
-  EXPECT_NE(SerializeWireReply(dispatched.answer).find("featureEnabled"),
+  EXPECT_NE(SerializeWireReply(dispatched.answer).payload.find("featureEnabled"),
             std::string::npos)
       << SerializeWireReply(dispatched.answer);
 
@@ -366,13 +368,13 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
 
   // The tab target is enumerated and typed (GetOrCreateAll includes it).
   std::string children_reply =
-      RootDispatch(root, "targets/__getChildren").reply;
+      RootDispatch(root, "targets/__getChildren").reply.payload;
   std::optional<base::ListValue> children = ParseList(children_reply);
   ASSERT_TRUE(children.has_value()) << children_reply;
   EXPECT_TRUE(AsStringSet(*children).count(kTargetsPrefix + tab_id))
       << children_reply;
   std::string schema_reply =
-      RootDispatch(root, "targets/" + tab_id + "/__getSchema").reply;
+      RootDispatch(root, "targets/" + tab_id + "/__getSchema").reply.payload;
   std::optional<base::DictValue> schema = ParseDict(schema_reply);
   ASSERT_TRUE(schema.has_value()) << schema_reply;
   EXPECT_EQ(*schema->FindString("type"), "tab") << schema_reply;
@@ -380,7 +382,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   // Annotation-not-applicable on the non-page sub-mirror's domains.
   std::string domain_schema_reply =
       RootDispatch(root, "targets/" + tab_id + "/cdp/Runtime/__getSchema")
-          .reply;
+          .reply.payload;
   std::optional<base::DictValue> domain_schema =
       ParseDict(domain_schema_reply);
   ASSERT_TRUE(domain_schema.has_value()) << domain_schema_reply;
@@ -413,7 +415,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   ASSERT_TRUE(WaitUntilSettled(get_targets.answer));
   ASSERT_EQ(get_targets.answer->state_kind(), StateKind::ResolvedValue)
       << get_targets.answer->broken_reason();
-  EXPECT_NE(SerializeWireReply(get_targets.answer).find("targetInfos"),
+  EXPECT_NE(SerializeWireReply(get_targets.answer).payload.find("targetInfos"),
             std::string::npos)
       << SerializeWireReply(get_targets.answer);
 
@@ -432,7 +434,7 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   // A second tab to close (the first stays — CloseTabGlobal-style guard
   // is irrelevant here, the strip closes index 1 directly).
   content::WebContents* first_wc = GetWC();
-  EXPECT_NE(RootDispatch(root, "tabs/open").reply, "-1");
+  EXPECT_NE(RootDispatch(root, "tabs/open").reply.payload, "-1");
   ASSERT_TRUE(base::test::RunUntil([&]() { return GetWC() != first_wc; }));
   content::WebContents* second_wc = GetWC();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -482,16 +484,14 @@ IN_PROC_BROWSER_TEST_F(AurelianTargetsMirrorBrowserTest,
   ChromeRoot* sealed_off = CreateChromeRootWithPolicy(
       EmbodimentPolicy::WithCapabilities({"system"}));
   ASSERT_NE(sealed_off, nullptr);
-  EXPECT_NE(RootDispatch(sealed_off, "targets").reply.find("broken"),
-            std::string::npos);
-  EXPECT_NE(
-      RootDispatch(sealed_off, "targets/__getChildren").reply.find("broken"),
-      std::string::npos);
+  EXPECT_TRUE(RootDispatch(sealed_off, "targets").reply.is_broken());
+  EXPECT_TRUE(
+      RootDispatch(sealed_off, "targets/__getChildren").reply.is_broken());
   DestroyChromeRoot(sealed_off);
 
   ChromeRoot* full = CreateChromeRoot();
   ASSERT_NE(full, nullptr);
-  std::string reply = RootDispatch(full, "targets/__getChildren").reply;
+  std::string reply = RootDispatch(full, "targets/__getChildren").reply.payload;
   EXPECT_TRUE(ParseList(reply).has_value())
       << "FullStandalone does not mount targets: " << reply;
   DestroyChromeRoot(full);

@@ -40,8 +40,9 @@ TEST(CompletionBridgeTest, CompletedRecordPublishesReply) {
   std::shared_ptr<CompletionRecord> record = bridge.CreateRecord();
   EXPECT_EQ(bridge.LiveRecordCountForTesting(), 1u);
 
-  bridge.Complete(record, "the-reply");
-  EXPECT_EQ(bridge.Wait(record, base::Seconds(5)), "the-reply");
+  bridge.Complete(record, WireReply::MakeValue("\"the-reply\""));
+  EXPECT_EQ(bridge.Wait(record, base::Seconds(5)).payload,
+            "\"the-reply\"");
   // Completion removed the record from the live set (design section 3:
   // serve thread adds, completion removes, Stop() enumerates).
   EXPECT_EQ(bridge.LiveRecordCountForTesting(), 0u);
@@ -53,9 +54,10 @@ TEST(CompletionBridgeTest, WaiterWokenByCompletionFromAnotherThread) {
 
   std::thread completer([&bridge, record]() {
     base::PlatformThread::Sleep(base::Milliseconds(50));
-    bridge.Complete(record, "threaded-reply");
+    bridge.Complete(record, WireReply::MakeValue("\"threaded-reply\""));
   });
-  EXPECT_EQ(bridge.Wait(record, base::Seconds(5)), "threaded-reply");
+  EXPECT_EQ(bridge.Wait(record, base::Seconds(5)).payload,
+            "\"threaded-reply\"");
   completer.join();
 }
 
@@ -74,8 +76,9 @@ TEST(CompletionBridgeTest, TimedWaitAbandonsThenLateSettlementErasesOnce) {
   EXPECT_EQ(bridge.RegistrarSizeForTesting(), 1u);
 
   // Nobody settles: the serve-thread wait expires typed.
-  EXPECT_EQ(bridge.Wait(record, base::Milliseconds(1)),
-            kDispatchTimeoutReply);
+  WireReply expired = bridge.Wait(record, base::Milliseconds(1));
+  EXPECT_TRUE(expired.is_broken());
+  EXPECT_EQ(expired.payload, kDispatchTimeoutReason);
 
   // The LATE settlement: the entry is still there (no unregister round-trip
   // happened), the heap record is still alive (shared ownership), the write
@@ -83,14 +86,18 @@ TEST(CompletionBridgeTest, TimedWaitAbandonsThenLateSettlementErasesOnce) {
   answer->settle(ValueHandle::make(Value(std::string("unused"))));
   bridge.NotifySettled(answer);
   EXPECT_EQ(record->outcome.load(), CompletionRecord::kCompleted);
-  EXPECT_EQ(record->reply, "late-answer-uri");
+  // TEST-CHANGE (AU-WIRE-KIND): was "late-answer-uri" — the
+  // placeholder DESIGNATION, which the old seam emitted because it
+  // never checked the handle state. The answer is the inner value.
+  EXPECT_FALSE(record->reply.is_broken());
+  EXPECT_EQ(record->reply.payload, "\"unused\"");
   EXPECT_TRUE(record->event.IsSignaled());
   EXPECT_EQ(bridge.RegistrarSizeForTesting(), 0u);
   EXPECT_EQ(bridge.LiveRecordCountForTesting(), 0u);
 
   // ONE-SHOT: a second delivery finds nothing and changes nothing.
   bridge.NotifySettled(answer);
-  EXPECT_EQ(record->reply, "late-answer-uri");
+  EXPECT_EQ(record->reply.payload, "\"unused\"");
   EXPECT_EQ(bridge.RegistrarSizeForTesting(), 0u);
 }
 
@@ -102,7 +109,7 @@ TEST(CompletionBridgeTest, StopWakesBlockedWaiterTyped) {
   CompletionBridge bridge;
   std::shared_ptr<CompletionRecord> record = bridge.CreateRecord();
 
-  std::string result;
+  WireReply result;
   std::thread waiter([&bridge, &record, &result]() {
     result = bridge.Wait(record, base::Seconds(30));
   });
@@ -111,7 +118,8 @@ TEST(CompletionBridgeTest, StopWakesBlockedWaiterTyped) {
   base::PlatformThread::Sleep(base::Milliseconds(50));
   bridge.Stop();
   waiter.join();
-  EXPECT_EQ(result, kDispatchShutdownReply);
+  EXPECT_TRUE(result.is_broken());
+  EXPECT_EQ(result.payload, kDispatchShutdownReason);
 }
 
 // The CAS winner decides (design section 3, round-5 M4): a completion that
@@ -123,18 +131,19 @@ TEST(CompletionBridgeTest, CasOneShotOutcome) {
   // Stop() first -> the completion loses.
   std::shared_ptr<CompletionRecord> lost = bridge.CreateRecord();
   bridge.Stop();
-  bridge.Complete(lost, "too-late");
+  bridge.Complete(lost, WireReply::MakeValue("\"too-late\""));
   EXPECT_EQ(lost->outcome.load(), CompletionRecord::kShutdown);
-  EXPECT_EQ(bridge.Wait(lost, base::Seconds(5)), kDispatchShutdownReply);
+  EXPECT_EQ(bridge.Wait(lost, base::Seconds(5)).payload,
+            kDispatchShutdownReason);
 }
 
 TEST(CompletionBridgeTest, CompletionBeforeStopKeepsReply) {
   CompletionBridge bridge;
   std::shared_ptr<CompletionRecord> record = bridge.CreateRecord();
-  bridge.Complete(record, "kept");
+  bridge.Complete(record, WireReply::MakeValue("\"kept\""));
   bridge.Stop();
   EXPECT_EQ(record->outcome.load(), CompletionRecord::kCompleted);
-  EXPECT_EQ(bridge.Wait(record, base::Seconds(5)), "kept");
+  EXPECT_EQ(bridge.Wait(record, base::Seconds(5)).payload, "\"kept\"");
 }
 
 // After Stop() a record is born shutdown: the serve thread that raced past
@@ -145,7 +154,8 @@ TEST(CompletionBridgeTest, RecordsBornShutdownAfterStop) {
   bridge.Stop();
   std::shared_ptr<CompletionRecord> record = bridge.CreateRecord();
   base::TimeTicks start = base::TimeTicks::Now();
-  EXPECT_EQ(bridge.Wait(record, base::Seconds(30)), kDispatchShutdownReply);
+  EXPECT_EQ(bridge.Wait(record, base::Seconds(30)).payload,
+            kDispatchShutdownReason);
   EXPECT_LT(base::TimeTicks::Now() - start, base::Seconds(5));
 }
 

@@ -13,23 +13,36 @@ import("//build/config/compiler/compiler.gni")
 
 _velite_src = "../../../Legion/Velite/src"
 
+# The vendored, owned libz3 the in-process binding dlopens (velite-cpp/src/z3).
+_velite_z3_dylib =
+    "$_velite_src/../../as-library/velite-z3/vendor/libz3/arm64/libz3.dylib"
+
 # Common include_dirs shared by all source_sets.
 _velite_include_dirs = [
-  "$_velite_src/agentspaces-wire/include",
+  "$_velite_src/actor/include",
+  "$_velite_src/agent-replay/include",
   "$_velite_src/agentspaces/include",
+  "$_velite_src/agentspaces-wire/include",
+  "$_velite_src/cap-bits/include",
   "$_velite_src/capability/include",
   "$_velite_src/causal/include",
+  "$_velite_src/cells/include",
   "$_velite_src/channel/include",
+  "$_velite_src/codebase/include",
+  "$_velite_src/consensus/include",
   "$_velite_src/crypto/include",
   "$_velite_src/dataflow/include",
-  "$_velite_src/dispatch/include",
+  "$_velite_src/datastore/include",
+  "$_velite_src/docker/include",
   "$_velite_src/envelope/include",
   "$_velite_src/envelopes/include",
   "$_velite_src/fact-log/include",
   "$_velite_src/fact-substrate/include",
   "$_velite_src/federated-kg/include",
   "$_velite_src/forth/include",
+  "$_velite_src/forth-ed25519-prims/include",
   "$_velite_src/forth-handle/include",
+  "$_velite_src/gce/include",
   "$_velite_src/handle/include",
   "$_velite_src/host/include",
   "$_velite_src/identity/include",
@@ -38,23 +51,25 @@ _velite_include_dirs = [
   "$_velite_src/lattices/include",
   "$_velite_src/ontology/include",
   "$_velite_src/origin-sequence/include",
-  "$_velite_src/overlay/include",
+  "$_velite_src/pal/include",
+  "$_velite_src/process-fabric/include",
+  "$_velite_src/quickjs/include",
+  "$_velite_src/quickjs-ed25519-prims/include",
+  "$_velite_src/quickjs-handle/include",
+  "$_velite_src/recovery/include",
+  "$_velite_src/replay-handle/include",
   "$_velite_src/resources/include",
+  "$_velite_src/resources2/include",
   "$_velite_src/search/include",
   "$_velite_src/substrate/include",
-  "$_velite_src/datastore/include",
-  "$_velite_src/actor/include",
-  "$_velite_src/agent/include",
-  "$_velite_src/agent-replay/include",
-  "$_velite_src/cap-bits/include",
-  "$_velite_src/cells/include",
-  "$_velite_src/replay-handle/include",
+  "$_velite_src/tls/include",
+  "$_velite_src/tls13/include",
+  "$_velite_src/z3/include",
   "$_velite_src/mt/runtime/include",
   "$_velite_src/mt/compiler/include",
   # quickjs: current velite mt/runtime includes <velite/quickjs.hpp> (the JSON
   # serializer is QuickJS — "no parallel serializer"). The header path must be
   # visible to every velite source_set (same-guards-as-//velite invariant).
-  "$_velite_src/quickjs/include",
   "$_velite_src/crypto/vendor",
   "$_velite_src/agentspaces-wire/src",
   "$_velite_src/forth/src",
@@ -98,7 +113,7 @@ config("velite_warnings") {
   # the SAME class layout — an inconsistent define is an ODR violation (the
   # guarded kg_handle_concrete_ member changes the object size). The aurelian
   # consumers get the same define via static_library("velite") all_dependent_configs.
-  defines = [ "LEGION_HAS_FEDERATED_KG=1" ]
+  defines = [ "LEGION_HAS_LOCAL_KG=1", "LEGION_HAS_FEDERATED_KG=1" ]
 }
 
 # --- Monocypher (vendored C crypto primitives) ---
@@ -226,6 +241,18 @@ source_set("velite_core") {
     "$_velite_src/host/src/yaml_field.cpp",
     "$_velite_src/resources/src/manifest.cpp",
     "$_velite_src/origin-sequence/src/origin_sequence.cpp",
+
+    # velite-consensus — the PURE, I/O-free Raft core (RaftState +
+    # deterministic transition + RPC canonical-CBOR codec + the safety
+    # predicates). agentspaces-wire/src/consensus_runtime.cpp calls into
+    # these; without them aurelian fails to link. A sibling of
+    # origin-sequence above, per consensus/CMakeLists.txt.
+    # velite-pal posix port — Entropy::fill (macOS takes the posix port).
+    "$_velite_src/pal/posix/entropy.cpp",
+
+    "$_velite_src/consensus/src/codec.cpp",
+    "$_velite_src/consensus/src/state.cpp",
+    "$_velite_src/consensus/src/transition.cpp",
   ]
   include_dirs = _velite_include_dirs
   configs -= [
@@ -240,6 +267,31 @@ source_set("velite_core") {
     ":velite_warnings",
   ]
   deps = [ ":monocypher" ]
+}
+
+# --- Recovery (the typed gap/recovery primitive shared across
+#     causality/overlay/dataflow — called by
+#     agentspaces-wire/src/recovery_verbs.cpp. Its OWN source_set because
+#     recovery/src/codec.cpp collides on codec.o with consensus/src/codec.cpp
+#     inside velite_core.) ---
+source_set("velite_recovery") {
+  sources = [
+    "$_velite_src/recovery/src/codec.cpp",
+    "$_velite_src/recovery/src/contract.cpp",
+    "$_velite_src/recovery/src/runtime.cpp",
+  ]
+  include_dirs = _velite_include_dirs
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    ":velite_warnings",
+  ]
 }
 
 # --- Envelopes (CBOR signed envelopes — separate source_set because its
@@ -292,6 +344,10 @@ source_set("velite_handle") {
 # --- Channel (uses BoringSSL) ---
 source_set("velite_channel") {
   sources = [
+    # Conduit chunking + the raw socket write helper — called by
+    # agentspaces-wire/src/dispatcher.cpp.
+    "$_velite_src/channel/src/chunk_segment.cpp",
+    "$_velite_src/channel/src/write_all.cpp",
     "$_velite_src/channel/src/tcp_channel.cpp",
     "$_velite_src/channel/src/tcp_listener.cpp",
     "$_velite_src/channel/src/tls_ws_channel.cpp",
@@ -542,15 +598,55 @@ source_set("velite_datastore") {
   ]
 }
 
+# --- z3: the OWNED in-process libz3 binding + the extern-C velite_z3_* shim ---
+# Mirrors velite-cpp/src/z3/CMakeLists.txt (target velite-z3-core). Z3Lib needs C++
+# exceptions, so — exactly as in the CMake build, where velite-z3-core is its own static
+# lib that the -fno-exceptions velite-mt-bridge LINKS rather than compiles — this is a
+# SEPARATE source_set with exceptions enabled. The extern-C boundary contains z3's own
+# exception machinery, so nothing leaks into the rest of the fork.
+#
+# native_library.cpp (velite::codebase::NativeLibrary — dlopen/dlsym/dlclose) comes along
+# because the binding is a pure dlopen binding: it declares its own function-pointer types
+# and never includes z3.h, so the vendored dylib is a RESOURCE PATH, not a link edge.
+source_set("velite_z3") {
+  sources = [
+    "$_velite_src/codebase/src/native_library.cpp",
+    "$_velite_src/z3/src/z3_lib.cpp",
+    "$_velite_src/z3/src/z3_shim.cpp",
+  ]
+  include_dirs = _velite_include_dirs + [
+    "$_velite_src/z3/include",
+    "$_velite_src/codebase/include",
+  ]
+  defines = [
+    # A path the binding dlopen's at runtime — not a behaviour flag.
+    "VELITE_Z3_VENDORED_DYLIB=\"$_velite_z3_dylib\"",
+  ]
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_rtti",
+    "//build/config/compiler:no_exceptions",
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:rtti",
+    "//build/config/compiler:exceptions",
+    ":velite_warnings",
+  ]
+}
+
 # --- MT runtime + compiler + bridge + primitives ---
 source_set("velite_mt") {
   sources = [
     "$_velite_src/mt/bridge/vm_bridge.cpp",
-    # z3_wrapper.cpp: velite_z3_check_sat/_solve, subprocess-based (no Z3 SDK
-    # link; degrades to "unknown" when no z3 binary is on PATH). vm_bridge's
-    # SMT primitives reference it (CF-0: vm_bridge.o is loaded once the
-    # vendored bootstrap's components factory lights).
-    "$_velite_src/mt/bridge/z3_wrapper.cpp",
+    # velite_z3_check_sat/_solve (vm_bridge's SMT primitives reference them) now come
+    # from the :velite_z3 dep below. They used to be compiled in here as
+    # mt/bridge/z3_wrapper.cpp, which popen'd the system z3 binary; Legion DELETED that
+    # file in 3bac0a7e70 (VENDORED-NATIVE-SOLVERS P2.3-ii) and folded an in-process
+    # binding into the substrate. This list is a hand-maintained mirror of velite-cpp's,
+    # so that deletion broke the fork build outright.
     "$_velite_src/mt/compiler/adapt_resolver.cpp",
     "$_velite_src/mt/compiler/emit.cpp",
     "$_velite_src/mt/compiler/handler_step_emitter.cpp",
@@ -572,7 +668,11 @@ source_set("velite_mt") {
   ]
   include_dirs = _velite_include_dirs
   # mt/runtime/runtime.cpp uses velite::quickjs::Vm (the JSON serializer).
-  deps = [ ":velite_quickjs" ]
+  # :velite_z3 supplies the extern-C velite_z3_* symbols vm_bridge references.
+  deps = [
+    ":velite_quickjs",
+    ":velite_z3",
+  ]
   configs -= [
     "//build/config/compiler:chromium_code",
     "//build/config/compiler:no_rtti",
@@ -612,6 +712,49 @@ source_set("velite_wire") {
     # added to velite agentspaces-wire in the 1891-commit drift.
     "$_velite_src/agentspaces-wire/src/cache_runtime.cpp",
     "$_velite_src/agentspaces-wire/src/conformance_bootstrap.cpp",
+    # The WHOLE agentspaces-wire module. It is ONE library in velite-cpp's CMake; the
+    # fork used to mirror a hand-picked subset, which is precisely why each substrate
+    # release broke the link with a fresh batch of undefined ConformanceBootstrap
+    # members. Mirror the module, not a snapshot of the symbols that happened to be
+    # referenced on the day someone last built this.
+    "$_velite_src/agentspaces-wire/src/capability_token.cpp",
+    "$_velite_src/agentspaces-wire/src/child_connection.cpp",
+    "$_velite_src/agentspaces-wire/src/conformance_bootstrap_dht.cpp",
+    # constraint_uri_eval.cpp is DELIBERATELY omitted — velite-cpp itself compiles it only
+    # under if(TARGET velite-constraint-eval) (agentspaces-wire/CMakeLists.txt:674): "a
+    # reduced wire build without the mt runtime omits both the source and the link". The
+    # fork IS such a reduced build, so it must omit it too (and must NOT define
+    # VELITE_WIRE_HAS_CONSTRAINT_URI_EVAL). This is the one file where mirroring the whole
+    # module would be WRONG.
+    "$_velite_src/agentspaces-wire/src/durability_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/durable_audit_sink.cpp",
+    "$_velite_src/agentspaces-wire/src/kg_handle_query.cpp",
+    "$_velite_src/agentspaces-wire/src/mt_bootstrap_kinds.cpp",
+    "$_velite_src/agentspaces-wire/src/mt_schema_projection.cpp",
+    "$_velite_src/agentspaces-wire/src/process_fabric_reconstruct_verb.cpp",
+    "$_velite_src/agentspaces-wire/src/registered_embodiment_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/runner_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/running_app_handle.cpp",
+    "$_velite_src/agentspaces-wire/src/settlable_fixture_verbs.cpp",
+    "$_velite_src/agentspaces-wire/src/spawn_backend.cpp",
+    "$_velite_src/agentspaces-wire/src/spawn_handshake.cpp",
+    "$_velite_src/agentspaces-wire/src/spawner_handle.cpp",
+    # ConformanceBootstrap::verb_consensus_* / verb_*_snapshot_ / verb_legion_recover_
+    # are declared in conformance_bootstrap.hpp and DEFINED here. velite-cpp grew these
+    # files after the fork last linked (15 Jun 2026); the hand-maintained mirror never
+    # learned about them, so the link failed with 18 undefined symbols.
+    # ConformanceBootstrap::verb_migrate_remote_mt_ / record_migrated_subtree_
+    "$_velite_src/process-fabric/src/capture.cpp",
+    "$_velite_src/process-fabric/src/migrate.cpp",
+    "$_velite_src/process-fabric/src/process_fabric_migrate_verb.cpp",
+    "$_velite_src/agentspaces-wire/src/consensus_channel_verbs.cpp",
+    "$_velite_src/agentspaces-wire/src/consensus_replication_verbs.cpp",
+    "$_velite_src/agentspaces-wire/src/consensus_runtime.cpp",
+    "$_velite_src/agentspaces-wire/src/consensus_state_store.cpp",
+    "$_velite_src/agentspaces-wire/src/consensus_verbs.cpp",
+    "$_velite_src/agentspaces-wire/src/recovery_inbound_seam.cpp",
+    "$_velite_src/agentspaces-wire/src/recovery_snapshot_verbs.cpp",
+    "$_velite_src/agentspaces-wire/src/recovery_verbs.cpp",
     "$_velite_src/agentspaces-wire/src/datastore_handle.cpp",
     "$_velite_src/agentspaces-wire/src/dispatcher.cpp",
     "$_velite_src/agentspaces-wire/src/facet_manifest.cpp",
@@ -669,7 +812,7 @@ source_set("velite_wire") {
 # kg_handle_concrete_ MEMBER changes the object layout). Propagated to every
 # dependent via all_dependent_configs on the static_library below.
 config("velite_fkg_public") {
-  defines = [ "LEGION_HAS_FEDERATED_KG=1" ]
+  defines = [ "LEGION_HAS_LOCAL_KG=1", "LEGION_HAS_FEDERATED_KG=1" ]
 }
 
 # --- Aggregate target ---
@@ -692,6 +835,7 @@ static_library("velite") {
     ":velite_ontology",
     ":velite_quickjs",
     ":velite_search",
+    ":velite_recovery",
     ":velite_wire",
   ]
   all_dependent_configs = [ ":velite_fkg_public" ]

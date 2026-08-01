@@ -112,7 +112,7 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CdpCompatCommand) {
             velite::agentspaces::StateKind::ResolvedValue)
       << outcome.answer->broken_reason();
 
-  std::string resp = SerializeWireReply(outcome.answer);
+  std::string resp = SerializeWireReply(outcome.answer).payload;
   EXPECT_NE(resp.find("\"result\""), std::string::npos) << resp;
   EXPECT_NE(resp.find("\"value\":42"), std::string::npos)
       << "expected Runtime.evaluate to return 42; got: " << resp;
@@ -159,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest, CapturesCdpEvent) {
     ASSERT_NE(event, nullptr);
     EXPECT_EQ(event->as_string(), "Runtime.consoleAPICalled");
     if (SerializeWireReply(velite::agentspaces::ValueHandle::make(frame))
-            .find("cdp-evt-42") != std::string::npos) {
+            .payload.find("cdp-evt-42") != std::string::npos) {
       saw_logged_text = true;
     }
   }
@@ -191,7 +191,7 @@ IN_PROC_BROWSER_TEST_F(AurelianDevtoolsBrowserTest,
       << outcome.answer->broken_reason();
   nav_observer.Wait();
 
-  std::string active = RootDispatch(root, "tabs/activeUrl").reply;
+  std::string active = RootDispatch(root, "tabs/activeUrl").reply.payload;
   EXPECT_NE(active.find("acm-s1-navigated"), std::string::npos)
       << "facade does not observe the CDP-driven navigation: " << active;
   DestroyChromeRoot(root);

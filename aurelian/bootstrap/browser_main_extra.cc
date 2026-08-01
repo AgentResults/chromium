@@ -19,6 +19,7 @@
 #include "aurelian/federation/wire_event_mailbox.h"
 #include "aurelian/mirror/cdp_session.h"
 #include "aurelian/handles/root/root_handle.h"
+#include "aurelian/handles/root/wire_serialize.h"
 #include "aurelian/media/aurelian_virtual_camera.h"
 #include "aurelian/media/aurelian_virtual_mic.h"
 #include "aurelian/membrane/embodiment_policy.h"
@@ -135,7 +136,7 @@ std::string ResolveAurelianPeerSeed() {
 
 // The installed sealed root the ONE exported dispatch closes over — set by
 // the one-shot install, cleared at teardown so a post-teardown dispatch is
-// fail-closed ("broken:no-root"), never dangling.
+// fail-closed (a typed broken("no-root") reply), never dangling.
 ChromeRoot* g_installed_root = nullptr;
 
 }  // namespace
@@ -155,7 +156,7 @@ ChromeWireSubscribeFn InstalledWireSubscribe() {
         // (the refusal never reaches the UI thread, design §6.1).
         auto refused = [](const std::string& reason) {
           auto r = std::make_shared<CompletionRecord>();
-          r->reply = reason;
+          r->reply = WireReply::MakeBroken(reason);
           r->outcome.store(CompletionRecord::kCompleted);
           r->event.Signal();
           return r;
@@ -164,7 +165,7 @@ ChromeWireSubscribeFn InstalledWireSubscribe() {
         //        legion://chrome/targets/<id>/cdp/<D>/events/<e> (target).
         constexpr char kPrefix[] = "legion://chrome/";
         if (uri.rfind(kPrefix, 0) != 0) {
-          return refused("broken:event-uri-malformed:" + uri);
+          return refused("event-uri-malformed:" + uri);
         }
         std::string rel = uri.substr(sizeof(kPrefix) - 1);
         std::string target_id;
@@ -172,25 +173,25 @@ ChromeWireSubscribeFn InstalledWireSubscribe() {
           rel = rel.substr(8);
           const size_t slash = rel.find('/');
           if (slash == std::string::npos) {
-            return refused("broken:event-uri-malformed:" + uri);
+            return refused("event-uri-malformed:" + uri);
           }
           target_id = rel.substr(0, slash);
           rel = rel.substr(slash + 1);
         }
         // rel must now be cdp/<Domain>/events/<event>.
         if (rel.rfind("cdp/", 0) != 0) {
-          return refused("broken:event-uri-malformed:" + uri);
+          return refused("event-uri-malformed:" + uri);
         }
         rel = rel.substr(4);
         const size_t d_slash = rel.find('/');
         if (d_slash == std::string::npos ||
             rel.compare(d_slash + 1, 7, "events/") != 0) {
-          return refused("broken:event-uri-malformed:" + uri);
+          return refused("event-uri-malformed:" + uri);
         }
         const std::string domain = rel.substr(0, d_slash);
         const std::string event = rel.substr(d_slash + 1 + 7);
         if (domain.empty() || event.empty()) {
-          return refused("broken:event-uri-malformed:" + uri);
+          return refused("event-uri-malformed:" + uri);
         }
         const std::string event_method = domain + "." + event;
 
@@ -214,15 +215,16 @@ ChromeWireSubscribeFn InstalledWireSubscribe() {
                           velite::agentspaces::StateKind::Broken) {
                     CompletionBridge::Get().Complete(
                         record,
-                        "broken:" +
-                            std::string(sub ? sub->broken_reason()
-                                            : "subscribe-failed"));
+                        WireReply::MakeBroken(std::string(
+                            sub ? sub->broken_reason()
+                                : "subscribe-failed")));
                     return;
                   }
                   // Overflow can now cancel the producer side (design §5.2).
                   sink->set_subscription(sub);
-                  CompletionBridge::Get().Complete(record,
-                                                   "subscribed:" + sub_id);
+                  CompletionBridge::Get().Complete(
+                      record, SerializeWireValue(velite::agentspaces::Value(
+                                  "subscribed:" + sub_id)));
                 },
                 uri, sub_id, mailbox, target_id, event_method, record));
         // CF-6: NON-blocking — the wrapper wraps this record in a
@@ -256,8 +258,8 @@ BeginChromeDispatchFn InstalledBeginChromeDispatch() {
                   ChromeRoot* root = g_installed_root;
                   if (!root) {
                     // Fail-closed outside the install window.
-                    CompletionBridge::Get().Complete(std::move(record),
-                                                     "broken:no-root");
+                    CompletionBridge::Get().Complete(
+                        std::move(record), WireReply::MakeBroken("no-root"));
                     return;
                   }
                   DispatchOutcome outcome =
@@ -422,8 +424,13 @@ void BrowserMainExtra::PostCreateThreads() {
 
   // 3. Prove the membrane is erected + its root reachable: walk it for
   //    identity (a settled answer — Completed by construction).
-  std::string identity_result =
+  const WireReply identity_reply =
       RootDispatch(impl_->root, "__getIdentity").reply;
+  // Log the KIND, not just the text: a sealed-root probe that came back a
+  // refusal used to print indistinguishably from a successful identity.
+  const std::string identity_result =
+      identity_reply.is_broken() ? ("broken(" + identity_reply.payload + ")")
+                                 : identity_reply.payload;
   LOG(WARNING) << "[aurelian] legion://chrome/ install-membrane sealed; "
                << "__getIdentity=" << identity_result;
 

@@ -15,28 +15,76 @@ using velite::agentspaces::Handle;
 using velite::agentspaces::StateKind;
 using velite::agentspaces::Value;
 
-std::string SerializeWireReply(const std::shared_ptr<Handle>& h) {
-  if (!h) {
-    return "broken:null";
+namespace {
+
+// Whether the shared marshaller can carry this Value losslessly. to_json()
+// renders the kinds it cannot represent — an in-process Handle, a wire
+// SlotRef, a byte string — as `null`, which at a wire seam is a silent drop
+// dressed as an answer. Conversions are lossless or they refuse.
+bool CanLower(const Value& v) {
+  if (v.is_null() || v.is_bool() || v.is_int() || v.is_double() ||
+      v.is_string()) {
+    return true;
   }
-  if (h->state_kind() == StateKind::Broken) {
-    return std::string("broken:") + std::string(h->broken_reason());
+  if (v.is_array()) {
+    for (const Value& item : v.as_array()) {
+      if (!CanLower(item)) {
+        return false;
+      }
+    }
+    return true;
   }
-  const Value& v = h->resolved_value();
-  // Top-level scalars keep their BARE form — the wire's "verb -> scalar"
-  // contract that callers parse directly (e.g. tabs/count -> "3",
-  // tabs/activeUrl -> the raw URL). Quoting them would break those callers.
-  if (v.is_string()) {
-    return v.as_string();
+  if (v.is_object()) {
+    for (const auto& [key, val] : v.as_object()) {
+      if (!CanLower(val)) {
+        return false;
+      }
+    }
+    return true;
   }
-  if (v.is_int()) {
-    return std::to_string(v.as_int());
+  return false;
+}
+
+}  // namespace
+
+WireReply SerializeWireValue(const Value& v) {
+  if (!CanLower(v)) {
+    return WireReply::MakeBroken("conversion-lossy");
   }
-  // Every richer kind — bools, doubles, arrays, objects, and arbitrary nesting
-  // — goes through the shared Velite marshaller, which renders canonical JSON
-  // with correct string escaping. No kind is silently dropped to "null", and
-  // string fields can no longer emit malformed/injectable JSON.
-  return velite::agentspaces::to_json(v).to_string();
+  return WireReply::MakeValue(velite::agentspaces::to_json(v).to_string());
+}
+
+WireReply SerializeWireReply(const std::shared_ptr<Handle>& h) {
+  // ResolvedHandle is the PROMISE shape, not a capability answer: a settled
+  // Placeholder holds the real answer in resolved_handle(), while its own
+  // resolved_value() is that placeholder URI — a DESIGNATION. Reading the
+  // designation as the answer (what this seam used to do, because it never
+  // checked the state at all) put a URI on the wire where the caller
+  // expected a result. Unwrap instead, bounded, so a cyclic or pathological
+  // chain refuses loudly rather than spinning. A live node handle reports
+  // ResolvedValue with its identity value and is unaffected.
+  constexpr int kMaxUnwrap = 8;
+  std::shared_ptr<Handle> cur = h;
+  for (int hop = 0; hop <= kMaxUnwrap; ++hop) {
+    if (!cur) {
+      return WireReply::MakeBroken("null-answer");
+    }
+    switch (cur->state_kind()) {
+      case StateKind::Broken:
+        return WireReply::MakeBroken(std::string(cur->broken_reason()));
+      case StateKind::Pending:
+        // The caller owns the wait; RootDispatch hands Pending answers back
+        // rather than serializing them. Arriving here means that contract
+        // was broken — reported, never papered over with an empty value.
+        return WireReply::MakeBroken("answer-still-pending");
+      case StateKind::ResolvedValue:
+        return SerializeWireValue(cur->resolved_value());
+      case StateKind::ResolvedHandle:
+        cur = cur->resolved_handle();
+        continue;
+    }
+  }
+  return WireReply::MakeBroken("handle-answer-chain-too-deep");
 }
 
 }  // namespace aurelian

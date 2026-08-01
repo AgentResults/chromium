@@ -532,7 +532,7 @@ class ChromeRootHandle : public Handle {
 // Serializes a settled handle's reply to the federation-wire string form. The
 // complete, escaping-correct implementation lives in wire_serialize.cc (shared
 // + unit-tested); this is a thin alias kept for call-site readability.
-std::string Serialize(const std::shared_ptr<Handle>& h) {
+WireReply Serialize(const std::shared_ptr<Handle>& h) {
   return SerializeWireReply(h);
 }
 
@@ -565,7 +565,7 @@ DispatchOutcome RootDispatch(ChromeRoot* root,
                              const std::string& serialized_spec) {
   DispatchOutcome out;
   if (!root || !root->handle) {
-    out.reply = "broken:no-root";
+    out.reply = WireReply::MakeBroken("no-root");
     return out;
   }
   // Walk the path segment by segment from the root. Each non-final segment must
@@ -584,7 +584,7 @@ DispatchOutcome RootDispatch(ChromeRoot* root,
   if (!serialized_spec.empty()) {
     velite::json::JsonValue parsed;
     if (!velite::json::JsonValue::parse(serialized_spec, parsed)) {
-      out.reply = "broken:spec-parse-failure";
+      out.reply = WireReply::MakeBroken("spec-parse-failure");
       return out;
     }
     final_spec = velite::agentspaces::from_json(parsed);

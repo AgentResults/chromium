@@ -54,9 +54,9 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest, EnumeratesAllDomains) {
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "cdp/__getIdentity").reply, "legion://chrome/cdp");
+  EXPECT_EQ(RootDispatch(root, "cdp/__getIdentity").reply.payload, "\"legion://chrome/cdp\"");
 
-  std::string reply = RootDispatch(root, "cdp/__getChildren").reply;
+  std::string reply = RootDispatch(root, "cdp/__getChildren").reply.payload;
   std::optional<base::ListValue> children = ParseList(reply);
   ASSERT_TRUE(children.has_value()) << "not a JSON list: " << reply;
 
@@ -84,10 +84,10 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest,
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "cdp/Page/__getIdentity").reply,
-            "legion://chrome/cdp/Page");
+  EXPECT_EQ(RootDispatch(root, "cdp/Page/__getIdentity").reply.payload,
+            "\"legion://chrome/cdp/Page\"");
 
-  std::string reply = RootDispatch(root, "cdp/Page/__getChildren").reply;
+  std::string reply = RootDispatch(root, "cdp/Page/__getChildren").reply.payload;
   std::optional<base::ListValue> children = ParseList(reply);
   ASSERT_TRUE(children.has_value()) << "not a JSON list: " << reply;
 
@@ -117,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest,
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  std::string reply = RootDispatch(root, "cdp/Page/navigate/__getSchema").reply;
+  std::string reply = RootDispatch(root, "cdp/Page/navigate/__getSchema").reply.payload;
   std::optional<base::DictValue> schema = ParseDict(reply);
   ASSERT_TRUE(schema.has_value()) << "not a JSON dict: " << reply;
 
@@ -146,19 +146,19 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest, NodesCarryDeclaredTypes) {
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "cdp/__getType").reply, "legion://types/CdpCatalog");
+  EXPECT_EQ(RootDispatch(root, "cdp/__getType").reply.payload, "\"legion://types/CdpCatalog\"");
   const CdpCatalog& cat = CdpCatalog::Get();
   for (const std::string& d : cat.domains()) {
-    EXPECT_EQ(RootDispatch(root, "cdp/" + d + "/__getType").reply,
-              "legion://types/CdpDomain")
+    EXPECT_EQ(RootDispatch(root, "cdp/" + d + "/__getType").reply.payload,
+              "\"legion://types/CdpDomain\"")
         << d;
   }
-  EXPECT_EQ(RootDispatch(root, "cdp/Page/navigate/__getType").reply,
-            "legion://types/CdpCommand");
-  EXPECT_EQ(RootDispatch(root, "cdp/Browser/getVersion/__getType").reply,
-            "legion://types/CdpCommand");
-  EXPECT_EQ(RootDispatch(root, "cdp/Page/frameNavigated/__getType").reply,
-            "legion://types/CdpEvent");
+  EXPECT_EQ(RootDispatch(root, "cdp/Page/navigate/__getType").reply.payload,
+            "\"legion://types/CdpCommand\"");
+  EXPECT_EQ(RootDispatch(root, "cdp/Browser/getVersion/__getType").reply.payload,
+            "\"legion://types/CdpCommand\"");
+  EXPECT_EQ(RootDispatch(root, "cdp/Page/frameNavigated/__getType").reply.payload,
+            "\"legion://types/CdpEvent\"");
 
   DestroyChromeRoot(root);
 }
@@ -172,14 +172,14 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest,
   ASSERT_NE(root, nullptr);
 
   std::optional<base::DictValue> page =
-      ParseDict(RootDispatch(root, "cdp/Page/__getSchema").reply);
+      ParseDict(RootDispatch(root, "cdp/Page/__getSchema").reply.payload);
   ASSERT_TRUE(page.has_value());
   const base::DictValue* page_ctx = page->FindDict("sessionContext");
   ASSERT_NE(page_ctx, nullptr);
   EXPECT_EQ(page_ctx->FindBool("inBrowserUnion"), false);
 
   std::optional<base::DictValue> browser =
-      ParseDict(RootDispatch(root, "cdp/Browser/__getSchema").reply);
+      ParseDict(RootDispatch(root, "cdp/Browser/__getSchema").reply.payload);
   ASSERT_TRUE(browser.has_value());
   const base::DictValue* browser_ctx = browser->FindDict("sessionContext");
   ASSERT_NE(browser_ctx, nullptr);
@@ -189,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest,
   // the derivation's, asserted via the catalog, not a hand-named list).
   for (const std::string& d : CdpCatalog::Get().BrowserOnlyDomains()) {
     std::optional<base::DictValue> dom =
-        ParseDict(RootDispatch(root, "cdp/" + d + "/__getSchema").reply);
+        ParseDict(RootDispatch(root, "cdp/" + d + "/__getSchema").reply.payload);
     ASSERT_TRUE(dom.has_value()) << d;
     const base::DictValue* ctx = dom->FindDict("sessionContext");
     ASSERT_NE(ctx, nullptr) << d;
@@ -205,10 +205,10 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest, UnknownNamesTyped) {
   ChromeRoot* root = CreateChromeRoot();
   ASSERT_NE(root, nullptr);
 
-  EXPECT_EQ(RootDispatch(root, "cdp/NoSuchDomain/__getType").reply,
-            "broken:unknown-domain");
-  EXPECT_EQ(RootDispatch(root, "cdp/Page/noSuchMember/__getType").reply,
-            "broken:unknown-command-or-event");
+  EXPECT_TRUE(RootDispatch(root, "cdp/NoSuchDomain/__getType").reply.is_broken());
+  EXPECT_EQ(RootDispatch(root, "cdp/NoSuchDomain/__getType").reply.payload, "unknown-domain");
+  EXPECT_TRUE(RootDispatch(root, "cdp/Page/noSuchMember/__getType").reply.is_broken());
+  EXPECT_EQ(RootDispatch(root, "cdp/Page/noSuchMember/__getType").reply.payload, "unknown-command-or-event");
 
   DestroyChromeRoot(root);
 }
@@ -220,18 +220,17 @@ IN_PROC_BROWSER_TEST_F(AurelianCdpMirrorBrowserTest, MirrorSealedBehindPolicy) {
   ChromeRoot* sealed_off = CreateChromeRootWithPolicy(
       EmbodimentPolicy::WithCapabilities({"system"}));
   ASSERT_NE(sealed_off, nullptr);
-  EXPECT_NE(RootDispatch(sealed_off, "cdp").reply.find("broken"), std::string::npos);
-  EXPECT_NE(RootDispatch(sealed_off, "cdp/__getChildren").reply.find("broken"),
-            std::string::npos);
-  EXPECT_NE(
-      RootDispatch(sealed_off, "cdp/Page/navigate/__getSchema").reply.find("broken"),
-      std::string::npos);
+  EXPECT_TRUE(RootDispatch(sealed_off, "cdp").reply.is_broken());
+  EXPECT_TRUE(
+      RootDispatch(sealed_off, "cdp/__getChildren").reply.is_broken());
+  EXPECT_TRUE(RootDispatch(sealed_off, "cdp/Page/navigate/__getSchema")
+                  .reply.is_broken());
   DestroyChromeRoot(sealed_off);
 
   ChromeRoot* sealed_in = CreateChromeRoot();  // FullStandalone grants cdp.
   ASSERT_NE(sealed_in, nullptr);
-  EXPECT_EQ(RootDispatch(sealed_in, "cdp/__getIdentity").reply,
-            "legion://chrome/cdp");
+  EXPECT_EQ(RootDispatch(sealed_in, "cdp/__getIdentity").reply.payload,
+            "\"legion://chrome/cdp\"");
   DestroyChromeRoot(sealed_in);
 }
 
